@@ -1314,6 +1314,43 @@ async function forwardToAnthropicStream(augmentReq, res) {
                                 }
                                 // ========== 路径修正逻辑结束 ==========
 
+                                // ========== Playwright 工具参数修正 ==========
+                                if (currentToolUse.name.includes('Playwright')) {
+                                    // 1. browser_wait_for_Playwright: time 参数需要是数字
+                                    if (currentToolUse.name === 'browser_wait_for_Playwright') {
+                                        if (input.time !== undefined && typeof input.time === 'string') {
+                                            const numTime = parseInt(input.time, 10);
+                                            if (!isNaN(numTime)) {
+                                                outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: time "${input.time}" -> ${numTime}`);
+                                                input.time = numTime;
+                                            }
+                                        }
+                                        if (input.wait_time !== undefined && input.time === undefined) {
+                                            const numTime = typeof input.wait_time === 'string' ? parseInt(input.wait_time, 10) : input.wait_time;
+                                            outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: wait_time -> time = ${numTime}`);
+                                            input.time = numTime;
+                                            delete input.wait_time;
+                                        }
+                                    }
+                                    // 2. browser_run_code_Playwright: code -> function
+                                    if (currentToolUse.name === 'browser_run_code_Playwright') {
+                                        if (input.code !== undefined && input.function === undefined) {
+                                            outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_run_code: code -> function`);
+                                            input.function = input.code;
+                                            delete input.code;
+                                        }
+                                    }
+                                    // 3. browser_evaluate_Playwright: expression -> function
+                                    if (currentToolUse.name === 'browser_evaluate_Playwright') {
+                                        if (input.expression !== undefined && input.function === undefined) {
+                                            outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
+                                            input.function = input.expression;
+                                            delete input.expression;
+                                        }
+                                    }
+                                }
+                                // ========== Playwright 工具参数修正结束 ==========
+
                                 // Augment 格式的 tool node (ResponseNodeType: 5=TOOL_USE)
                                 // 逆向分析确认：Augment 期望 tool_use 属性包含 tool_use_id, tool_name, input_json
                                 const toolNode = {
@@ -1714,6 +1751,45 @@ async function forwardToOpenAIStream(augmentReq, res) {
                             }
                         }
                         // ========== 路径修正逻辑结束 ==========
+
+                        // ========== Playwright 工具参数修正 ==========
+                        // GLM 生成的参数可能与 Playwright MCP 期望的不匹配
+                        if (tc.name.includes('Playwright')) {
+                            // 1. browser_wait_for_Playwright: time 参数需要是数字
+                            if (tc.name === 'browser_wait_for_Playwright') {
+                                if (parsed.time !== undefined && typeof parsed.time === 'string') {
+                                    const numTime = parseInt(parsed.time, 10);
+                                    if (!isNaN(numTime)) {
+                                        outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: time "${parsed.time}" -> ${numTime}`);
+                                        parsed.time = numTime;
+                                    }
+                                }
+                                // wait_time -> time 映射
+                                if (parsed.wait_time !== undefined && parsed.time === undefined) {
+                                    const numTime = typeof parsed.wait_time === 'string' ? parseInt(parsed.wait_time, 10) : parsed.wait_time;
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: wait_time -> time = ${numTime}`);
+                                    parsed.time = numTime;
+                                    delete parsed.wait_time;
+                                }
+                            }
+                            // 2. browser_run_code_Playwright: code -> function
+                            if (tc.name === 'browser_run_code_Playwright') {
+                                if (parsed.code !== undefined && parsed.function === undefined) {
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_run_code: code -> function`);
+                                    parsed.function = parsed.code;
+                                    delete parsed.code;
+                                }
+                            }
+                            // 3. browser_evaluate_Playwright: expression -> function
+                            if (tc.name === 'browser_evaluate_Playwright') {
+                                if (parsed.expression !== undefined && parsed.function === undefined) {
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
+                                    parsed.function = parsed.expression;
+                                    delete parsed.expression;
+                                }
+                            }
+                        }
+                        // ========== Playwright 工具参数修正结束 ==========
 
                         // 特别检查 save-file 的参数
                         if (tc.name === 'save-file') {
