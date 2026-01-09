@@ -1340,12 +1340,18 @@ async function forwardToAnthropicStream(augmentReq, res) {
                                             delete input.code;
                                         }
                                     }
-                                    // 3. browser_evaluate_Playwright: expression -> function
+                                    // 3. browser_evaluate_Playwright: expression/code -> function
                                     if (currentToolUse.name === 'browser_evaluate_Playwright') {
                                         if (input.expression !== undefined && input.function === undefined) {
                                             outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
                                             input.function = input.expression;
                                             delete input.expression;
+                                        }
+                                        // GLM 有时用 'code' 而不是 'expression'
+                                        if (input.code !== undefined && input.function === undefined) {
+                                            outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: code -> function`);
+                                            input.function = input.code;
+                                            delete input.code;
                                         }
                                     }
                                 }
@@ -1780,12 +1786,18 @@ async function forwardToOpenAIStream(augmentReq, res) {
                                     delete parsed.code;
                                 }
                             }
-                            // 3. browser_evaluate_Playwright: expression -> function
+                            // 3. browser_evaluate_Playwright: expression/code -> function
                             if (tc.name === 'browser_evaluate_Playwright') {
                                 if (parsed.expression !== undefined && parsed.function === undefined) {
                                     outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
                                     parsed.function = parsed.expression;
                                     delete parsed.expression;
+                                }
+                                // GLM 有时用 'code' 而不是 'expression'
+                                if (parsed.code !== undefined && parsed.function === undefined) {
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: code -> function`);
+                                    parsed.function = parsed.code;
+                                    delete parsed.code;
                                 }
                             }
                         }
