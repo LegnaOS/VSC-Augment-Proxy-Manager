@@ -1405,7 +1405,36 @@ function convertToolDefinitionsToOpenAI(toolDefs) {
 // 将 Augment 请求转换为 OpenAI 格式消息
 function augmentToOpenAIMessages(req) {
     const messages = [];
-    // 处理聊天历史
+    // 收集所有 tool_use 和对应的 tool_result
+    // Augment 的 chat_history 结构:
+    //   exchange[i].response_nodes 包含 tool_use
+    //   exchange[i].request_nodes 或 exchange[i+1].request_nodes 包含对应的 tool_result
+    // OpenAI 要求: assistant(tool_calls) 后必须紧跟所有对应的 tool 消息
+
+    // 构建 tool_use_id -> tool_result 的映射
+    const toolResultMap = new Map();
+    if (req.chat_history) {
+        for (const exchange of req.chat_history) {
+            for (const node of exchange.request_nodes || []) {
+                if (node.type === 1 && node.tool_result_node) {
+                    const tr = node.tool_result_node;
+                    const id = tr.tool_use_id || tr.id;
+                    toolResultMap.set(id, tr);
+                }
+            }
+        }
+    }
+    // 当前请求的 tool_result 也加入映射
+    for (const node of req.nodes || []) {
+        if (node.type === 1 && node.tool_result_node) {
+            const tr = node.tool_result_node;
+            const id = tr.tool_use_id || tr.id;
+            toolResultMap.set(id, tr);
+        }
+    }
+    outputChannel.appendLine(`[DEBUG] OpenAI: Built tool result map with ${toolResultMap.size} entries`);
+
+    // 处理聊天历史，确保 assistant(tool_calls) 后紧跟对应的 tool 消息
     if (req.chat_history) {
         for (const exchange of req.chat_history) {
             // 用户请求消息
@@ -1441,6 +1470,20 @@ function augmentToOpenAIMessages(req) {
                     assistantMsg.content = textContent;
                 messages.push(assistantMsg);
                 outputChannel.appendLine(`[DEBUG] OpenAI: Added assistant with ${toolCalls.length} tool_calls`);
+
+                // 关键修复：紧跟添加对应的 tool 结果
+                for (const tc of toolCalls) {
+                    const tr = toolResultMap.get(tc.id);
+                    if (tr) {
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: tc.id,
+                            content: tr.content || ''
+                        });
+                        outputChannel.appendLine(`[DEBUG] OpenAI: Added tool result for ${tc.id}`);
+                        toolResultMap.delete(tc.id); // 标记已使用
+                    }
+                }
             }
             else {
                 // 普通文本响应
@@ -1449,33 +1492,16 @@ function augmentToOpenAIMessages(req) {
                     messages.push({ role: 'assistant', content: response });
                 }
             }
-            // 检查下一个请求中是否有 tool_result (作为 request_nodes)
-            const requestNodes = exchange.request_nodes || [];
-            for (const node of requestNodes) {
-                if (node.type === 1 && node.tool_result_node) {
-                    const tr = node.tool_result_node;
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: tr.tool_use_id || tr.id,
-                        content: tr.content || ''
-                    });
-                    outputChannel.appendLine(`[DEBUG] OpenAI: Added tool result for ${tr.tool_use_id || tr.id}`);
-                }
-            }
         }
     }
-    // 处理当前请求的 nodes（可能包含 tool_result）
-    const currentNodes = req.nodes || [];
-    for (const node of currentNodes) {
-        if (node.type === 1 && node.tool_result_node) {
-            const tr = node.tool_result_node;
-            messages.push({
-                role: 'tool',
-                tool_call_id: tr.tool_use_id || tr.id,
-                content: tr.content || ''
-            });
-            outputChannel.appendLine(`[DEBUG] OpenAI: Added current tool result for ${tr.tool_use_id || tr.id}`);
-        }
+    // 剩余未匹配的 tool_result（当前请求的）
+    for (const [id, tr] of toolResultMap) {
+        messages.push({
+            role: 'tool',
+            tool_call_id: id,
+            content: tr.content || ''
+        });
+        outputChannel.appendLine(`[DEBUG] OpenAI: Added remaining tool result for ${id}`);
     }
     // 添加当前用户消息
     const currentMessage = req.message || '';
