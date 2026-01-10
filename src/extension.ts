@@ -1584,17 +1584,22 @@ async function forwardToOpenAIStream(augmentReq, res) {
             outputChannel.appendLine(`[DEBUG] msg[${i}]: role=${msg.role}, content_len=${(msg.content || '').length}`);
         }
     }
+    // 判断是否需要工具调用 - GLM 不支持流式 tool_call，所以有 tools 时使用非流式
+    const hasTools = tools && tools.length > 0;
+    const useStreaming = !hasTools; // 有工具时禁用流式
+
     // 构建请求体
     const requestBody: any = {
         model: currentConfig.model,
         max_tokens: 8192,
         messages: openaiMessages,
-        stream: true
+        stream: useStreaming
     };
     // 添加工具定义
-    if (tools && tools.length > 0) {
+    if (hasTools) {
         requestBody.tools = tools;
         requestBody.tool_choice = 'auto';
+        outputChannel.appendLine(`[API] Tools detected (${tools.length}), using non-streaming mode for tool call compatibility`);
     }
     const apiBody = JSON.stringify(requestBody);
     // Append /chat/completions to baseUrl if not already present (for OpenAI-compatible APIs)
@@ -1614,10 +1619,10 @@ async function forwardToOpenAIStream(augmentReq, res) {
             'Authorization': `Bearer ${currentConfig.apiKey}`
         }
     };
-    const apiReq = https.request(options, (apiRes) => {
+    const apiReq = https.request(options, (apiRes: any) => {
         if (apiRes.statusCode !== 200) {
             let errorBody = '';
-            apiRes.on('data', c => errorBody += c);
+            apiRes.on('data', (c: any) => errorBody += c);
             apiRes.on('end', () => {
                 outputChannel.appendLine(`[API ERROR] Status ${apiRes.statusCode}: ${errorBody.slice(0, 200)}`);
                 sendAugmentError(res, `API Error ${apiRes.statusCode}`);
@@ -1625,14 +1630,68 @@ async function forwardToOpenAIStream(augmentReq, res) {
             return;
         }
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+
+        // 非流式模式：收集完整响应后一次性处理
+        if (!useStreaming) {
+            let responseBody = '';
+            apiRes.on('data', (chunk: any) => {
+                responseBody += chunk.toString();
+            });
+            apiRes.on('end', () => {
+                try {
+                    outputChannel.appendLine(`[API] Non-streaming response received (${responseBody.length} bytes)`);
+                    const response = JSON.parse(responseBody);
+                    const choice = response.choices?.[0];
+                    const message = choice?.message;
+
+                    // 处理文本内容
+                    if (message?.content) {
+                        res.write(JSON.stringify({ text: message.content, nodes: [], stop_reason: 0 }) + '\n');
+                    }
+
+                    // 处理 tool_calls
+                    if (message?.tool_calls && message.tool_calls.length > 0) {
+                        outputChannel.appendLine(`[API] Non-streaming tool_calls: ${JSON.stringify(message.tool_calls)}`);
+                        for (const toolCall of message.tool_calls) {
+                            const toolNode = {
+                                type: 7, // tool_use
+                                node_type: 'tool_use',
+                                tool_use_id: toolCall.id || `call_${Date.now()}`,
+                                tool_name: toolCall.function?.name || 'unknown',
+                                tool_use: {
+                                    tool_name: toolCall.function?.name || 'unknown',
+                                    input_json: toolCall.function?.arguments || '{}'
+                                }
+                            };
+                            const responseData = { text: '', nodes: [toolNode], stop_reason: 0 };
+                            outputChannel.appendLine(`[API] Sending tool to Augment: ${JSON.stringify(responseData)}`);
+                            res.write(JSON.stringify(responseData) + '\n');
+                        }
+                        // 有工具调用，stop_reason = 3
+                        res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
+                    } else {
+                        // 无工具调用，正常结束 stop_reason = 1
+                        res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
+                    }
+                    res.end();
+                    outputChannel.appendLine(`[API] Non-streaming response complete`);
+                } catch (e: any) {
+                    outputChannel.appendLine(`[API ERROR] Failed to parse non-streaming response: ${e.message}`);
+                    sendAugmentError(res, 'Failed to parse API response');
+                }
+            });
+            return;
+        }
+
+        // 流式模式：原有逻辑
         let buffer = '';
         let chunkCount = 0;
-        outputChannel.appendLine(`[API] OpenAI response started, status=${apiRes.statusCode}`);
+        outputChannel.appendLine(`[API] OpenAI streaming response started, status=${apiRes.statusCode}`);
         let inThinking = false; // 跟踪是否在思考模式中
         const toolCalls = new Map();
         let hasToolUse = false;
         let finishReason = null;
-        apiRes.on('data', (chunk) => {
+        apiRes.on('data', (chunk: any) => {
             chunkCount++;
             const chunkStr = chunk.toString();
             if (chunkCount === 1) {
@@ -1652,6 +1711,12 @@ async function forwardToOpenAIStream(augmentReq, res) {
                         const delta = choice?.delta?.content || '';
                         const reasoningDelta = choice?.delta?.reasoning_content || '';
                         const toolCallsDelta = choice?.delta?.tool_calls;
+
+                        // 调试：当有 tool_calls 时，记录完整的 choice 结构
+                        if (toolCallsDelta) {
+                            outputChannel.appendLine(`[API] Choice with tool_calls: ${JSON.stringify(choice)}`);
+                        }
+
                         // 记录 finish_reason
                         if (choice?.finish_reason) {
                             finishReason = choice.finish_reason;
@@ -1673,10 +1738,14 @@ async function forwardToOpenAIStream(augmentReq, res) {
                             }
                             res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n');
                         }
-                        // 处理工具调用 (OpenAI 格式)
+                        // 处理工具调用 (OpenAI 格式，兼容 GLM 等模型)
                         if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
                             for (const tc of toolCallsDelta) {
                                 const idx = tc.index ?? 0;
+
+                                // 调试：记录原始 tool_call 结构
+                                outputChannel.appendLine(`[API] Raw tool_call delta: ${JSON.stringify(tc)}`);
+
                                 if (!toolCalls.has(idx)) {
                                     // 新工具调用
                                     toolCalls.set(idx, {
@@ -1692,9 +1761,24 @@ async function forwardToOpenAIStream(augmentReq, res) {
                                     state.id = tc.id;
                                 if (tc.function?.name)
                                     state.name = tc.function.name;
-                                // 累积 arguments
-                                if (tc.function?.arguments) {
-                                    state.arguments += tc.function.arguments;
+
+                                // 累积 arguments (兼容多种格式)
+                                // 1. OpenAI 标准格式: tc.function.arguments (字符串)
+                                // 2. GLM 可能的格式: tc.function.parameters 或 tc.arguments
+                                // 3. 某些模型可能返回对象而不是字符串
+                                let argsValue = tc.function?.arguments
+                                    || tc.function?.parameters
+                                    || tc.arguments
+                                    || tc.parameters;
+
+                                if (argsValue !== undefined && argsValue !== null) {
+                                    // 如果是对象，转为 JSON 字符串
+                                    if (typeof argsValue === 'object') {
+                                        argsValue = JSON.stringify(argsValue);
+                                        outputChannel.appendLine(`[API] Converted object arguments to string: ${argsValue}`);
+                                    }
+                                    state.arguments += argsValue;
+                                    outputChannel.appendLine(`[API] Accumulated arguments: ${state.arguments}`);
                                 }
                             }
                         }
@@ -1715,8 +1799,15 @@ async function forwardToOpenAIStream(augmentReq, res) {
                 for (const [idx, tc] of toolCalls) {
                     outputChannel.appendLine(`[API] Sending tool_use: idx=${idx}, id=${tc.id}, name=${tc.name}`);
                     outputChannel.appendLine(`[API] Tool arguments (full): ${tc.arguments}`);
+
+                    // 警告：如果参数为空，可能是模型返回格式不兼容
+                    if (!tc.arguments || tc.arguments === '' || tc.arguments === '{}') {
+                        outputChannel.appendLine(`[WARN] Tool ${tc.name} has empty arguments! This may indicate incompatible model response format.`);
+                        outputChannel.appendLine(`[WARN] Check if the model uses a different field name for function arguments.`);
+                    }
+
                     // 验证并规范化 JSON
-                    let inputJson = tc.arguments;
+                    let inputJson = tc.arguments || '{}';
                     try {
                         const parsed = JSON.parse(tc.arguments);
                         outputChannel.appendLine(`[API] Tool input parsed keys: ${Object.keys(parsed).join(',')}`);
@@ -1778,15 +1869,34 @@ async function forwardToOpenAIStream(augmentReq, res) {
                                     delete parsed.wait_time;
                                 }
                             }
-                            // 2. browser_run_code_Playwright: code -> function
-                            if (tc.name === 'browser_run_code_Playwright') {
-                                if (parsed.code !== undefined && parsed.function === undefined) {
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_run_code: code -> function`);
-                                    parsed.function = parsed.code;
-                                    delete parsed.code;
+                            // 2. browser_run_code_Playwright: 不需要修正，MCP 期望 'code' 参数
+                            // GLM 生成的 'code' 参数名是正确的
+
+                            // 3. browser_click_Playwright: selector -> element + ref
+                            if (tc.name === 'browser_click_Playwright') {
+                                // GLM 可能用 'selector' 而不是 'element' + 'ref'
+                                if (parsed.selector !== undefined && parsed.element === undefined) {
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_click: selector -> element + ref`);
+                                    // 尝试解析 selector，格式可能是 "generic ref=e63" 或 "canvas"
+                                    const selectorStr = String(parsed.selector);
+                                    const refMatch = selectorStr.match(/ref=(\w+)/);
+                                    if (refMatch) {
+                                        // 有 ref 信息，提取它
+                                        parsed.ref = refMatch[1];
+                                        // element 描述去掉 ref 部分
+                                        parsed.element = selectorStr.replace(/\s*ref=\w+/, '').trim() || 'element';
+                                    } else {
+                                        // 没有 ref，用 selector 作为 element 描述
+                                        parsed.element = selectorStr;
+                                        // ref 需要从页面快照获取，这里无法自动填充
+                                        // 但至少提供 element 描述
+                                    }
+                                    delete parsed.selector;
+                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_click result: element="${parsed.element}", ref="${parsed.ref || 'undefined'}"`);
                                 }
                             }
-                            // 3. browser_evaluate_Playwright: expression/code -> function
+
+                            // 4. browser_evaluate_Playwright: expression/code -> function
                             if (tc.name === 'browser_evaluate_Playwright') {
                                 if (parsed.expression !== undefined && parsed.function === undefined) {
                                     outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
