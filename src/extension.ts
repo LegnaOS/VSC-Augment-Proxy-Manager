@@ -1157,9 +1157,10 @@ async function forwardToAnthropicStream(augmentReq, res) {
         });
         outputChannel.appendLine(`[DEBUG] MiniMax 缓存: 已在最后一个 tool 添加 cache_control`);
     }
+    // max_tokens 设为 GLM-4.7/4.6 最大输出 128K 的 90% ≈ 115000
     const requestBody: any = {
         model: currentConfig.model,
-        max_tokens: 8192,
+        max_tokens: 115000,
         system: systemContent,
         messages: messages,
         stream: true
@@ -1356,6 +1357,25 @@ async function forwardToAnthropicStream(augmentReq, res) {
                                     }
                                 }
                                 // ========== Playwright 工具参数修正结束 ==========
+
+                                // ========== view 工具参数修正 ==========
+                                // GLM 模型可能把 view_range 数组参数生成为字符串格式 "[1, 200]"
+                                // 需要转换为真正的数组 [1, 200]
+                                if (currentToolUse.name === 'view' && input.view_range !== undefined) {
+                                    if (typeof input.view_range === 'string') {
+                                        try {
+                                            // 尝试解析字符串格式的数组 "[1, 200]"
+                                            const parsed = JSON.parse(input.view_range);
+                                            if (Array.isArray(parsed) && parsed.length === 2) {
+                                                outputChannel.appendLine(`[VIEW FIX] view_range: "${input.view_range}" -> [${parsed[0]}, ${parsed[1]}]`);
+                                                input.view_range = parsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
+                                            }
+                                        } catch (e) {
+                                            outputChannel.appendLine(`[VIEW FIX] Failed to parse view_range: ${input.view_range}`);
+                                        }
+                                    }
+                                }
+                                // ========== view 工具参数修正结束 ==========
 
                                 // Augment 格式的 tool node (ResponseNodeType: 5=TOOL_USE)
                                 // 逆向分析确认：Augment 期望 tool_use 属性包含 tool_use_id, tool_name, input_json
@@ -1584,22 +1604,18 @@ async function forwardToOpenAIStream(augmentReq, res) {
             outputChannel.appendLine(`[DEBUG] msg[${i}]: role=${msg.role}, content_len=${(msg.content || '').length}`);
         }
     }
-    // 判断是否需要工具调用 - GLM 不支持流式 tool_call，所以有 tools 时使用非流式
-    const hasTools = tools && tools.length > 0;
-    const useStreaming = !hasTools; // 有工具时禁用流式
-
     // 构建请求体
+    // max_tokens 设为 GLM-4.7/4.6 最大输出 128K 的 90% ≈ 115000
     const requestBody: any = {
         model: currentConfig.model,
-        max_tokens: 8192,
+        max_tokens: 115000,
         messages: openaiMessages,
-        stream: useStreaming
+        stream: true
     };
     // 添加工具定义
-    if (hasTools) {
+    if (tools && tools.length > 0) {
         requestBody.tools = tools;
         requestBody.tool_choice = 'auto';
-        outputChannel.appendLine(`[API] Tools detected (${tools.length}), using non-streaming mode for tool call compatibility`);
     }
     const apiBody = JSON.stringify(requestBody);
     // Append /chat/completions to baseUrl if not already present (for OpenAI-compatible APIs)
@@ -1630,63 +1646,9 @@ async function forwardToOpenAIStream(augmentReq, res) {
             return;
         }
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-
-        // 非流式模式：收集完整响应后一次性处理
-        if (!useStreaming) {
-            let responseBody = '';
-            apiRes.on('data', (chunk: any) => {
-                responseBody += chunk.toString();
-            });
-            apiRes.on('end', () => {
-                try {
-                    outputChannel.appendLine(`[API] Non-streaming response received (${responseBody.length} bytes)`);
-                    const response = JSON.parse(responseBody);
-                    const choice = response.choices?.[0];
-                    const message = choice?.message;
-
-                    // 处理文本内容
-                    if (message?.content) {
-                        res.write(JSON.stringify({ text: message.content, nodes: [], stop_reason: 0 }) + '\n');
-                    }
-
-                    // 处理 tool_calls
-                    if (message?.tool_calls && message.tool_calls.length > 0) {
-                        outputChannel.appendLine(`[API] Non-streaming tool_calls: ${JSON.stringify(message.tool_calls)}`);
-                        for (const toolCall of message.tool_calls) {
-                            const toolNode = {
-                                type: 7, // tool_use
-                                node_type: 'tool_use',
-                                tool_use_id: toolCall.id || `call_${Date.now()}`,
-                                tool_name: toolCall.function?.name || 'unknown',
-                                tool_use: {
-                                    tool_name: toolCall.function?.name || 'unknown',
-                                    input_json: toolCall.function?.arguments || '{}'
-                                }
-                            };
-                            const responseData = { text: '', nodes: [toolNode], stop_reason: 0 };
-                            outputChannel.appendLine(`[API] Sending tool to Augment: ${JSON.stringify(responseData)}`);
-                            res.write(JSON.stringify(responseData) + '\n');
-                        }
-                        // 有工具调用，stop_reason = 3
-                        res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
-                    } else {
-                        // 无工具调用，正常结束 stop_reason = 1
-                        res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
-                    }
-                    res.end();
-                    outputChannel.appendLine(`[API] Non-streaming response complete`);
-                } catch (e: any) {
-                    outputChannel.appendLine(`[API ERROR] Failed to parse non-streaming response: ${e.message}`);
-                    sendAugmentError(res, 'Failed to parse API response');
-                }
-            });
-            return;
-        }
-
-        // 流式模式：原有逻辑
         let buffer = '';
         let chunkCount = 0;
-        outputChannel.appendLine(`[API] OpenAI streaming response started, status=${apiRes.statusCode}`);
+        outputChannel.appendLine(`[API] OpenAI response started, status=${apiRes.statusCode}`);
         let inThinking = false; // 跟踪是否在思考模式中
         const toolCalls = new Map();
         let hasToolUse = false;
@@ -1711,12 +1673,6 @@ async function forwardToOpenAIStream(augmentReq, res) {
                         const delta = choice?.delta?.content || '';
                         const reasoningDelta = choice?.delta?.reasoning_content || '';
                         const toolCallsDelta = choice?.delta?.tool_calls;
-
-                        // 调试：当有 tool_calls 时，记录完整的 choice 结构
-                        if (toolCallsDelta) {
-                            outputChannel.appendLine(`[API] Choice with tool_calls: ${JSON.stringify(choice)}`);
-                        }
-
                         // 记录 finish_reason
                         if (choice?.finish_reason) {
                             finishReason = choice.finish_reason;
@@ -1913,6 +1869,25 @@ async function forwardToOpenAIStream(augmentReq, res) {
                         }
                         // ========== Playwright 工具参数修正结束 ==========
 
+                        // ========== view 工具参数修正 ==========
+                        // GLM 模型可能把 view_range 数组参数生成为字符串格式 "[1, 200]"
+                        // 需要转换为真正的数组 [1, 200]
+                        if (tc.name === 'view' && parsed.view_range !== undefined) {
+                            if (typeof parsed.view_range === 'string') {
+                                try {
+                                    // 尝试解析字符串格式的数组 "[1, 200]"
+                                    const viewRangeParsed = JSON.parse(parsed.view_range);
+                                    if (Array.isArray(viewRangeParsed) && viewRangeParsed.length === 2) {
+                                        outputChannel.appendLine(`[VIEW FIX] view_range: "${parsed.view_range}" -> [${viewRangeParsed[0]}, ${viewRangeParsed[1]}]`);
+                                        parsed.view_range = viewRangeParsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
+                                    }
+                                } catch (e) {
+                                    outputChannel.appendLine(`[VIEW FIX] Failed to parse view_range: ${parsed.view_range}`);
+                                }
+                            }
+                        }
+                        // ========== view 工具参数修正结束 ==========
+
                         // 特别检查 save-file 的参数
                         if (tc.name === 'save-file') {
                             outputChannel.appendLine(`[API] save-file raw arguments: ${tc.arguments}`);
@@ -1930,6 +1905,17 @@ async function forwardToOpenAIStream(augmentReq, res) {
                     }
                     catch (e) {
                         outputChannel.appendLine(`[API] Tool arguments parse error: ${e}`);
+                        // 如果是因为输出被截断导致的 JSON 解析错误，跳过这个工具调用
+                        if (finishReason === 'length') {
+                            outputChannel.appendLine(`[API] Skipping truncated tool call: ${tc.name} (finish_reason=length)`);
+                            // 发送错误提示给用户
+                            res.write(JSON.stringify({
+                                text: `\n\n⚠️ 工具调用被截断: ${tc.name} - 文件内容过长，请尝试分段处理或减少内容长度。\n\n`,
+                                nodes: [],
+                                stop_reason: 0
+                            }) + '\n');
+                            continue; // 跳过这个工具调用
+                        }
                     }
                     const toolNode = {
                         type: 5, // TOOL_USE
