@@ -1501,12 +1501,24 @@ function augmentToOpenAIMessages(req) {
     if (req.chat_history) {
         for (const exchange of req.chat_history) {
             // 用户请求消息
-            const userContent = exchange.request_message || '';
+            let userContent = exchange.request_message || '';
+
+            // 检查响应中是否有内容 (需要提前检查以决定是否插入占位 user 消息)
+            const responseNodes = exchange.response_nodes || [];
+            const hasResponse = responseNodes.length > 0 || exchange.response_text || exchange.response_message;
+
+            // GLM API 要求: 消息序列必须是 user -> assistant 交替
+            // 如果有 assistant 响应但没有 user 消息，需要插入占位消息
+            if (!userContent && hasResponse && messages.length === 0) {
+                // 第一轮对话，但没有用户消息，插入占位
+                userContent = '...';
+                outputChannel.appendLine(`[DEBUG] OpenAI: Inserted placeholder user message for first exchange`);
+            }
+
             if (userContent) {
                 messages.push({ role: 'user', content: userContent });
             }
-            // 检查响应中是否有 tool_use
-            const responseNodes = exchange.response_nodes || [];
+            // 检查响应中是否有 tool_use（responseNodes 已在上面定义）
             const toolCalls = [];
             let textContent = '';
             for (const node of responseNodes) {
