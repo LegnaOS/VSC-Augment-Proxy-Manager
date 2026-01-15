@@ -19,4 +19,5 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-
+AugmentProxy日志
+Augment日志
