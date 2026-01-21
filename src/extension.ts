@@ -1826,6 +1826,9 @@ function convertToolDefinitionsToOpenAI(toolDefs) {
     }
     return tools.length > 0 ? tools : undefined;
 }
+// 保存每个会话的原始用户消息（解决 Augment 不在 chat_history 中保存 request_message 的问题）
+const conversationUserMessages = new Map<string, string>();
+
 // 将 Augment 请求转换为 OpenAI 格式消息
 function augmentToOpenAIMessages(req) {
     const messages = [];
@@ -1834,6 +1837,26 @@ function augmentToOpenAIMessages(req) {
     //   exchange[i].response_nodes 包含 tool_use
     //   exchange[i].request_nodes 或 exchange[i+1].request_nodes 包含对应的 tool_result
     // OpenAI 要求: assistant(tool_calls) 后必须紧跟所有对应的 tool 消息
+
+    // 🔧 关键修复：Augment 的 chat_history 中 exchange.request_message 总是为空！
+    // 用户的真正消息只在第一轮请求的 req.message 中
+    // 后续工具调用请求的 req.message 是 "..." 占位符
+    // 因此需要：
+    // 1. 第一轮请求时保存用户消息
+    // 2. 后续请求时从缓存中恢复
+
+    const conversationId = req.conversation_id || '';
+    const currentMessage = req.message || '';
+    const historyLength = (req.chat_history || []).length;
+
+    // 保存原始用户消息（仅当是新对话开始时，即 history=0 且 message 不是占位符）
+    if (historyLength === 0 && currentMessage && currentMessage !== '...') {
+        conversationUserMessages.set(conversationId, currentMessage);
+        outputChannel.appendLine(`[DEBUG] OpenAI: Saved original user message for conversation ${conversationId}: "${currentMessage.substring(0, 50)}..."`);
+    }
+
+    // 获取缓存的用户消息
+    const savedUserMessage = conversationUserMessages.get(conversationId) || '';
 
     // 构建 tool_use_id -> tool_result 的映射
     const toolResultMap = new Map();
@@ -1860,8 +1883,11 @@ function augmentToOpenAIMessages(req) {
 
     // 处理聊天历史，确保 assistant(tool_calls) 后紧跟对应的 tool 消息
     if (req.chat_history) {
-        for (const exchange of req.chat_history) {
+        for (let i = 0; i < req.chat_history.length; i++) {
+            const exchange = req.chat_history[i];
             // 用户请求消息
+            // 🔧 修复：exchange.request_message 在 Augment 中总是为空
+            // 对于第一轮（i=0），使用缓存的用户消息
             let userContent = exchange.request_message || '';
 
             // 检查响应中是否有内容 (需要提前检查以决定是否插入占位 user 消息)
@@ -1869,11 +1895,18 @@ function augmentToOpenAIMessages(req) {
             const hasResponse = responseNodes.length > 0 || exchange.response_text || exchange.response_message;
 
             // GLM API 要求: 消息序列必须是 user -> assistant 交替
-            // 如果有 assistant 响应但没有 user 消息，需要插入占位消息
+            // 如果有 assistant 响应但没有 user 消息，需要插入用户消息
             if (!userContent && hasResponse && messages.length === 0) {
-                // 第一轮对话，但没有用户消息，插入占位
-                userContent = '...';
-                outputChannel.appendLine(`[DEBUG] OpenAI: Inserted placeholder user message for first exchange`);
+                // 第一轮对话，但 exchange 中没有用户消息
+                // 🔧 关键修复：使用缓存的原始用户消息，而不是 "..."
+                if (savedUserMessage) {
+                    userContent = savedUserMessage;
+                    outputChannel.appendLine(`[DEBUG] OpenAI: Using cached user message for first exchange: "${savedUserMessage.substring(0, 50)}..."`);
+                } else {
+                    // 最后的 fallback，只有在没有任何信息时才用占位符
+                    userContent = '...';
+                    outputChannel.appendLine(`[DEBUG] OpenAI: No cached message found, inserted placeholder for first exchange`);
+                }
             }
 
             if (userContent) {
@@ -1940,7 +1973,7 @@ function augmentToOpenAIMessages(req) {
         outputChannel.appendLine(`[DEBUG] OpenAI: Added remaining tool result for ${id}`);
     }
     // 添加当前用户消息
-    const currentMessage = req.message || '';
+    // 注意：currentMessage 已在函数开头定义，直接使用即可
     if (currentMessage && currentMessage !== '...') { // "..." 是工具结果继续的占位符
         messages.push({ role: 'user', content: currentMessage });
     }
