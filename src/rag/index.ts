@@ -1,16 +1,19 @@
 /**
  * RAG Context Index - 高效的本地代码检索系统
- * 
+ *
  * 基于Augment日志逆向分析实现：
  * - MtimeCache: 基于修改时间的增量索引
  * - BlobStorage: SHA256去重的内容存储
  * - TF-IDF: 高效的文本相关性搜索
  * - CheckpointManager: 增量同步检查点
+ *
+ * 🔥 v0.10.0: 使用 LevelDB 替换 JSON 存储 (与 Augment 一致)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { KvStore } from './storage';
 
 // ============ 类型定义 ============
 
@@ -41,129 +44,192 @@ export interface RAGConfig {
     checkpointThreshold: number;  // 检查点阈值 (默认 1000)
 }
 
-// ============ MtimeCache - 修改时间缓存 ============
+// ============ MtimeCache - 修改时间缓存 (LevelDB) ============
 
 export class MtimeCache {
-    private cache: Map<string, number> = new Map();
-    private cacheFile: string;
+    private memCache: Map<string, number> = new Map();  // 内存缓存用于同步访问
+    private store: KvStore;
     private dirty: boolean = false;
+    private initialized: boolean = false;
 
     constructor(cacheDir: string) {
-        this.cacheFile = path.join(cacheDir, 'mtime-cache.json');
-        this.load();
+        this.store = new KvStore({ cacheDir, dbName: 'mtime-cache' });
     }
 
-    private load(): void {
+    async init(): Promise<void> {
+        if (this.initialized) return;
+        // 从 LevelDB 加载到内存缓存
         try {
-            if (fs.existsSync(this.cacheFile)) {
-                const data = JSON.parse(fs.readFileSync(this.cacheFile, 'utf-8'));
-                this.cache = new Map(Object.entries(data));
+            for await (const [key, value] of this.store.entries('mtime:')) {
+                const filePath = key.slice(6);  // 移除 'mtime:' 前缀
+                this.memCache.set(filePath, parseInt(value, 10));
             }
         } catch { /* 忽略加载错误 */ }
+        this.initialized = true;
     }
 
-    save(): void {
+    async save(): Promise<void> {
         if (!this.dirty) return;
-        try {
-            const dir = path.dirname(this.cacheFile);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            const obj = Object.fromEntries(this.cache);
-            fs.writeFileSync(this.cacheFile, JSON.stringify(obj, null, 2));
-            this.dirty = false;
-        } catch { /* 忽略保存错误 */ }
+        // 批量写入 LevelDB
+        const ops: Array<{ type: 'put'; key: string; value: string }> = [];
+        for (const [filePath, mtime] of this.memCache) {
+            ops.push({ type: 'put', key: `mtime:${filePath}`, value: String(mtime) });
+        }
+        if (ops.length > 0) {
+            await this.store.batch(ops);
+        }
+        this.dirty = false;
     }
 
     get(filePath: string): number | undefined {
-        return this.cache.get(filePath);
+        return this.memCache.get(filePath);
     }
 
     set(filePath: string, mtime: number): void {
-        this.cache.set(filePath, mtime);
+        this.memCache.set(filePath, mtime);
         this.dirty = true;
     }
 
     delete(filePath: string): void {
-        this.cache.delete(filePath);
+        this.memCache.delete(filePath);
         this.dirty = true;
+        // 异步删除 LevelDB
+        this.store.delete(`mtime:${filePath}`).catch(() => {});
     }
 
     has(filePath: string): boolean {
-        return this.cache.has(filePath);
+        return this.memCache.has(filePath);
     }
 
     isModified(filePath: string, currentMtime: number): boolean {
-        const cached = this.cache.get(filePath);
+        const cached = this.memCache.get(filePath);
         return cached === undefined || cached !== currentMtime;
     }
 
     size(): number {
-        return this.cache.size;
+        return this.memCache.size;
     }
 
-    clear(): void {
-        this.cache.clear();
-        this.dirty = true;
+    async clear(): Promise<void> {
+        this.memCache.clear();
+        this.dirty = false;
+        await this.store.clear('mtime:');
+    }
+
+    async close(): Promise<void> {
+        await this.save();
+        await this.store.close();
     }
 }
 
-// ============ BlobStorage - 内容去重存储 ============
+// ============ BlobStorage - 内容去重存储 (LevelDB) ============
 
 export class BlobStorage {
-    private blobs: Map<string, string> = new Map();  // blobId -> content
+    private blobCache: Map<string, string> = new Map();  // 热门 blob 内存缓存
     private pathToBlob: Map<string, string> = new Map();  // path -> blobId
-    private blobFile: string;
+    private kvStore: KvStore;
+    private initialized: boolean = false;
+    private dirty: boolean = false;
+    private maxCacheSize: number = 500;  // 最多缓存500个blob在内存中
 
     constructor(cacheDir: string) {
-        this.blobFile = path.join(cacheDir, 'blobs.json');
-        this.load();
+        this.kvStore = new KvStore({ cacheDir, dbName: 'blob-storage' });
     }
 
-    private load(): void {
+    async init(): Promise<void> {
+        if (this.initialized) return;
+        // 只加载 path -> blobId 映射到内存
         try {
-            if (fs.existsSync(this.blobFile)) {
-                const data = JSON.parse(fs.readFileSync(this.blobFile, 'utf-8'));
-                this.blobs = new Map(Object.entries(data.blobs || {}));
-                this.pathToBlob = new Map(Object.entries(data.pathToBlob || {}));
+            for await (const [key, value] of this.kvStore.entries('path:')) {
+                const filePath = key.slice(5);  // 移除 'path:' 前缀
+                this.pathToBlob.set(filePath, value);
             }
         } catch { /* 忽略加载错误 */ }
+        this.initialized = true;
     }
 
-    save(): void {
-        try {
-            const dir = path.dirname(this.blobFile);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            const data = {
-                blobs: Object.fromEntries(this.blobs),
-                pathToBlob: Object.fromEntries(this.pathToBlob)
-            };
-            fs.writeFileSync(this.blobFile, JSON.stringify(data));
-        } catch { /* 忽略保存错误 */ }
+    async save(): Promise<void> {
+        if (!this.dirty) return;
+        // 批量保存 path -> blobId 映射
+        const ops: Array<{ type: 'put'; key: string; value: string }> = [];
+        for (const [filePath, blobId] of this.pathToBlob) {
+            ops.push({ type: 'put', key: `path:${filePath}`, value: blobId });
+        }
+        if (ops.length > 0) {
+            await this.kvStore.batch(ops);
+        }
+        this.dirty = false;
     }
 
     static computeHash(content: string): string {
         return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
     }
 
-    store(filePath: string, content: string): string {
+    async storeBlob(filePath: string, content: string): Promise<string> {
         const blobId = BlobStorage.computeHash(content);
-        if (!this.blobs.has(blobId)) {
-            this.blobs.set(blobId, content);
+
+        // 检查 blob 是否已存在
+        if (!this.blobCache.has(blobId)) {
+            const existing = await this.kvStore.get(`blob:${blobId}`);
+            if (!existing) {
+                // 新 blob，写入 LevelDB
+                await this.kvStore.set(`blob:${blobId}`, content);
+            }
+            // 添加到内存缓存 (LRU)
+            if (this.blobCache.size >= this.maxCacheSize) {
+                const firstKey = this.blobCache.keys().next().value;
+                if (firstKey) this.blobCache.delete(firstKey);
+            }
+            this.blobCache.set(blobId, content);
         }
+
         this.pathToBlob.set(filePath, blobId);
+        this.dirty = true;
         return blobId;
     }
 
-    get(blobId: string): string | undefined {
-        return this.blobs.get(blobId);
+    // 同步版本用于兼容现有代码
+    storeSync(filePath: string, content: string): string {
+        const blobId = BlobStorage.computeHash(content);
+        this.blobCache.set(blobId, content);
+        this.pathToBlob.set(filePath, blobId);
+        this.dirty = true;
+        // 异步写入
+        this.kvStore.set(`blob:${blobId}`, content).catch(() => {});
+        return blobId;
     }
 
-    getByPath(filePath: string): string | undefined {
+    async get(blobId: string): Promise<string | undefined> {
+        // 先查内存缓存
+        if (this.blobCache.has(blobId)) {
+            return this.blobCache.get(blobId);
+        }
+        // 再查 LevelDB
+        const content = await this.kvStore.get(`blob:${blobId}`);
+        if (content) {
+            // 添加到内存缓存
+            if (this.blobCache.size >= this.maxCacheSize) {
+                const firstKey = this.blobCache.keys().next().value;
+                if (firstKey) this.blobCache.delete(firstKey);
+            }
+            this.blobCache.set(blobId, content);
+        }
+        return content;
+    }
+
+    // 同步版本 - 只从内存缓存获取
+    getSync(blobId: string): string | undefined {
+        return this.blobCache.get(blobId);
+    }
+
+    async getByPath(filePath: string): Promise<string | undefined> {
         const blobId = this.pathToBlob.get(filePath);
-        return blobId ? this.blobs.get(blobId) : undefined;
+        return blobId ? await this.get(blobId) : undefined;
+    }
+
+    getByPathSync(filePath: string): string | undefined {
+        const blobId = this.pathToBlob.get(filePath);
+        return blobId ? this.blobCache.get(blobId) : undefined;
     }
 
     getBlobId(filePath: string): string | undefined {
@@ -172,7 +238,13 @@ export class BlobStorage {
 
     delete(filePath: string): void {
         this.pathToBlob.delete(filePath);
-        // 注意：不删除blob本身，因为可能被其他文件引用
+        this.dirty = true;
+        this.kvStore.delete(`path:${filePath}`).catch(() => {});
+    }
+
+    async close(): Promise<void> {
+        await this.save();
+        await this.kvStore.close();
     }
 }
 
@@ -259,50 +331,72 @@ const IMPORTANT_FILE_PATTERNS = [
 export class TFIDFEngine {
     private documents: Map<string, IndexedDocument> = new Map();
     private idf: Map<string, number> = new Map();  // 逆文档频率
-    private indexFile: string;
+    private store: KvStore;
     private queryCache: QueryCache<Array<{ path: string; score: number; matchedTerms: string[] }>>;
+    private initialized: boolean = false;
+    private dirty: boolean = false;
 
     constructor(cacheDir: string) {
-        this.indexFile = path.join(cacheDir, 'tfidf-index.json');
+        this.store = new KvStore({ cacheDir, dbName: 'tfidf-index' });
         this.queryCache = new QueryCache(100, 60000);  // 100条缓存，60秒过期
-        this.load();
     }
 
-    private load(): void {
+    async init(): Promise<void> {
+        if (this.initialized) return;
         try {
-            if (fs.existsSync(this.indexFile)) {
-                const data = JSON.parse(fs.readFileSync(this.indexFile, 'utf-8'));
-                for (const [path, doc] of Object.entries(data.documents || {})) {
-                    const d = doc as any;
-                    this.documents.set(path, {
-                        ...d,
-                        termFreq: new Map(Object.entries(d.termFreq || {}))
-                    });
-                }
-                this.idf = new Map(Object.entries(data.idf || {}));
+            // 加载 IDF 表
+            const idfData = await this.store.get('meta:idf');
+            if (idfData) {
+                this.idf = new Map(Object.entries(JSON.parse(idfData)));
+            }
+
+            // 加载文档索引
+            for await (const [key, value] of this.store.entries('doc:')) {
+                const docPath = key.slice(4);  // 移除 'doc:' 前缀
+                const d = JSON.parse(value);
+                this.documents.set(docPath, {
+                    ...d,
+                    termFreq: new Map(Object.entries(d.termFreq || {}))
+                });
             }
         } catch { /* 忽略加载错误 */ }
+        this.initialized = true;
     }
 
-    save(): void {
+    async save(): Promise<void> {
+        if (!this.dirty) return;
         try {
-            const dir = path.dirname(this.indexFile);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            const docs: any = {};
-            for (const [path, doc] of this.documents) {
-                docs[path] = {
+            const ops: Array<{ type: 'put'; key: string; value: string }> = [];
+
+            // 保存 IDF 表
+            ops.push({
+                type: 'put',
+                key: 'meta:idf',
+                value: JSON.stringify(Object.fromEntries(this.idf))
+            });
+
+            // 批量保存文档
+            for (const [docPath, doc] of this.documents) {
+                const serialized = {
                     ...doc,
                     termFreq: Object.fromEntries(doc.termFreq)
                 };
+                ops.push({ type: 'put', key: `doc:${docPath}`, value: JSON.stringify(serialized) });
             }
-            const data = {
-                documents: docs,
-                idf: Object.fromEntries(this.idf)
-            };
-            fs.writeFileSync(this.indexFile, JSON.stringify(data));
+
+            await this.store.batch(ops);
+            this.dirty = false;
         } catch { /* 忽略保存错误 */ }
+    }
+
+    // 同步保存 - 仅标记为脏，实际保存延迟到 close()
+    saveSync(): void {
+        this.dirty = true;
+    }
+
+    async close(): Promise<void> {
+        await this.save();
+        await this.store.close();
     }
 
     // 🔥 增强分词器 - 支持驼峰、下划线、代码符号、中文
@@ -521,6 +615,7 @@ export class RAGContextIndex {
     private checkpointId: number = 0;
     private pendingChanges: number = 0;
     private initialized: boolean = false;
+    private storageReady: boolean = false;
 
     constructor(config: Partial<RAGConfig> & { workspaceRoot: string }) {
         this.config = {
@@ -553,8 +648,18 @@ export class RAGContextIndex {
         this.mtimeCache = new MtimeCache(this.config.cacheDir);
         this.blobStorage = new BlobStorage(this.config.cacheDir);
         this.tfidfEngine = new TFIDFEngine(this.config.cacheDir);
+    }
 
+    // 🔥 初始化 LevelDB 存储层
+    async initStorage(): Promise<void> {
+        if (this.storageReady) return;
+        await Promise.all([
+            this.mtimeCache.init(),
+            this.blobStorage.init(),
+            this.tfidfEngine.init()
+        ]);
         this.loadCheckpoint();
+        this.storageReady = true;
     }
 
     private loadCheckpoint(): void {
@@ -586,6 +691,9 @@ export class RAGContextIndex {
     async initialize(onProgress?: (current: number, total: number) => void): Promise<void> {
         if (this.initialized) return;
 
+        // 确保存储层已初始化
+        await this.initStorage();
+
         const files = this.scanFiles(this.config.workspaceRoot);
         const total = files.length;
         let processed = 0;
@@ -606,7 +714,7 @@ export class RAGContextIndex {
                 // 读取并索引文件
                 if (stat.size <= this.config.maxFileSize) {
                     const content = fs.readFileSync(file, 'utf-8');
-                    this.indexFile(relativePath, content, mtime, stat.size);
+                    await this.indexFile(relativePath, content, mtime, stat.size);
                     indexed++;
                 }
 
@@ -621,7 +729,7 @@ export class RAGContextIndex {
 
         // 重建IDF并保存
         this.tfidfEngine.rebuildIDF();
-        this.save();
+        await this.save();
         this.initialized = true;
     }
 
@@ -654,8 +762,8 @@ export class RAGContextIndex {
     }
 
     // 索引单个文件
-    private indexFile(relativePath: string, content: string, mtime: number, size: number): void {
-        const blobId = this.blobStorage.store(relativePath, content);
+    private async indexFile(relativePath: string, content: string, mtime: number, size: number): Promise<void> {
+        const blobId = this.blobStorage.storeSync(relativePath, content);  // 使用同步版本
         const tokens = TFIDFEngine.tokenize(content);
         const termFreq = TFIDFEngine.computeTermFreq(tokens);
 
@@ -673,32 +781,43 @@ export class RAGContextIndex {
 
         // 达到检查点阈值时保存
         if (this.pendingChanges >= this.config.checkpointThreshold) {
-            this.checkpoint();
+            await this.checkpoint();
         }
     }
 
     // 创建检查点
-    checkpoint(): void {
+    async checkpoint(): Promise<void> {
         this.checkpointId++;
-        this.save();
+        await this.save();
         this.pendingChanges = 0;
     }
 
-    // 保存所有缓存
-    save(): void {
-        this.mtimeCache.save();
-        this.blobStorage.save();
-        this.tfidfEngine.save();
+    // 保存所有缓存 (异步)
+    async save(): Promise<void> {
+        await Promise.all([
+            this.mtimeCache.save(),
+            this.blobStorage.save(),
+            this.tfidfEngine.save()
+        ]);
         this.saveCheckpoint();
     }
 
-    // 搜索
+    // 🔥 关闭存储 - 必须在扩展停用时调用
+    async close(): Promise<void> {
+        await Promise.all([
+            this.mtimeCache.close(),
+            this.blobStorage.close(),
+            this.tfidfEngine.close()
+        ]);
+    }
+
+    // 搜索 (使用同步版本获取内容)
     search(query: string, topK: number = 10): SearchResult[] {
         const tfidfResults = this.tfidfEngine.search(query, topK * 2);
         const results: SearchResult[] = [];
 
         for (const result of tfidfResults) {
-            const content = this.blobStorage.getByPath(result.path);
+            const content = this.blobStorage.getByPathSync(result.path);
             if (!content) continue;
 
             // 找到最相关的代码片段
@@ -770,7 +889,7 @@ export class RAGContextIndex {
     }
 
     // 增量更新 - 添加或更新文件
-    addToIndex(filePath: string): void {
+    async addToIndex(filePath: string): Promise<void> {
         try {
             const fullPath = path.join(this.config.workspaceRoot, filePath);
             const stat = fs.statSync(fullPath);
@@ -778,20 +897,20 @@ export class RAGContextIndex {
             if (stat.size > this.config.maxFileSize) return;
 
             const content = fs.readFileSync(fullPath, 'utf-8');
-            this.indexFile(filePath, content, stat.mtimeMs, stat.size);
+            await this.indexFile(filePath, content, stat.mtimeMs, stat.size);
             this.mtimeCache.set(filePath, stat.mtimeMs);
             this.tfidfEngine.rebuildIDF();
-            this.tfidfEngine.clearCache();  // 🔥 清除查询缓存
+            this.tfidfEngine.clearCache();
         } catch { /* 忽略错误 */ }
     }
 
     // 🔥 增量更新 - 添加内容（用于batch-upload）
-    addContentToIndex(filePath: string, content: string): void {
+    async addContentToIndex(filePath: string, content: string): Promise<void> {
         try {
             if (content.length > this.config.maxFileSize) return;
 
             const mtime = Date.now();
-            this.indexFile(filePath, content, mtime, content.length);
+            await this.indexFile(filePath, content, mtime, content.length);
             this.mtimeCache.set(filePath, mtime);
             this.tfidfEngine.rebuildIDF();
             this.tfidfEngine.clearCache();
@@ -804,17 +923,17 @@ export class RAGContextIndex {
         this.blobStorage.delete(filePath);
         this.mtimeCache.delete(filePath);
         this.tfidfEngine.rebuildIDF();
-        this.tfidfEngine.clearCache();  // 🔥 清除查询缓存
+        this.tfidfEngine.clearCache();
     }
 
     // 🔥 批量添加到索引（用于batch-upload）
-    addBatchToIndex(files: Array<{ path: string; content: string }>): number {
+    async addBatchToIndex(files: Array<{ path: string; content: string }>): Promise<number> {
         let indexed = 0;
         for (const file of files) {
             try {
                 if (file.content.length <= this.config.maxFileSize) {
                     const mtime = Date.now();
-                    this.indexFile(file.path, file.content, mtime, file.content.length);
+                    await this.indexFile(file.path, file.content, mtime, file.content.length);
                     this.mtimeCache.set(file.path, mtime);
                     indexed++;
                 }
@@ -824,7 +943,7 @@ export class RAGContextIndex {
         if (indexed > 0) {
             this.tfidfEngine.rebuildIDF();
             this.tfidfEngine.clearCache();
-            this.save();
+            await this.save();
         }
 
         return indexed;
@@ -851,13 +970,14 @@ export class RAGContextIndex {
     }
 
     // 清除索引
-    clear(): void {
-        this.mtimeCache.clear();
+    async clear(): Promise<void> {
+        await this.mtimeCache.clear();
         this.tfidfEngine = new TFIDFEngine(this.config.cacheDir);
         this.blobStorage = new BlobStorage(this.config.cacheDir);
         this.checkpointId = 0;
         this.pendingChanges = 0;
         this.initialized = false;
+        this.storageReady = false;
     }
 }
 

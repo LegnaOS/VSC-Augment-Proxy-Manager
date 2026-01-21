@@ -489,7 +489,12 @@ async function initializeRAGIndex(): Promise<void> {
 
     try {
         ragIndex = new RAGContextIndex({ workspaceRoot });
-        outputChannel.appendLine(`[RAG] Initializing index for ${workspaceRoot}...`);
+        outputChannel.appendLine(`[RAG] Initializing LevelDB storage...`);
+
+        // 🔥 初始化 LevelDB 存储层
+        await ragIndex.initStorage();
+
+        outputChannel.appendLine(`[RAG] Indexing files in ${workspaceRoot}...`);
 
         const startTime = Date.now();
         await ragIndex.initialize((current, total) => {
@@ -503,6 +508,19 @@ async function initializeRAGIndex(): Promise<void> {
         outputChannel.appendLine(`[RAG] Index ready: ${stats.documentCount} documents, checkpoint ${stats.checkpointId}, took ${elapsed}s`);
     } catch (error) {
         outputChannel.appendLine(`[RAG] Failed to initialize: ${error}`);
+        ragIndex = null;
+    }
+}
+
+// 关闭 RAG 索引 - 释放 LevelDB 资源
+async function closeRAGIndex(): Promise<void> {
+    if (ragIndex) {
+        try {
+            await ragIndex.close();
+            outputChannel.appendLine('[RAG] LevelDB storage closed');
+        } catch (error) {
+            outputChannel.appendLine(`[RAG] Error closing storage: ${error}`);
+        }
         ragIndex = null;
     }
 }
@@ -849,7 +867,7 @@ function handleBatchUpload(req, res) {
                 }
 
                 if (filesToIndex.length > 0) {
-                    indexedCount = ragIndex.addBatchToIndex(filesToIndex);
+                    indexedCount = await ragIndex.addBatchToIndex(filesToIndex);
                     outputChannel.appendLine(`[BATCH-UPLOAD] Indexed ${indexedCount}/${filesToIndex.length} files to local RAG`);
                 }
             }
@@ -3095,7 +3113,10 @@ vscode.postMessage({command:'getConfig'});
 </html>`;
     }
 }
-function deactivate() {
+async function deactivate() {
+    // 关闭 RAG 索引 (释放 LevelDB)
+    await closeRAGIndex();
+
     if (proxyServer) {
         proxyServer.close();
     }
