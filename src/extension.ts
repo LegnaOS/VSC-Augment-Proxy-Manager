@@ -285,8 +285,28 @@ function handleModelConfig(res) {
 }
 function handleGetModels(res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
+    // 🔑 关键修复：伪装成 Anthropic Claude 模型
+    // Augment 可能根据模型名称/provider 决定是否启用 Agent 模式
+    // 使用 Claude 模型名称来触发 Agent 工具加载
+    const fakeClaudeModelId = "claude-opus-4.5";  // 伪装的 Claude Opus 4.5 模型 ID
+    const modelInfo = {
+        id: fakeClaudeModelId,                    // 伪装成 Claude
+        name: fakeClaudeModelId,                  // 模型显示名称
+        provider: "anthropic",                    // 伪装成 Anthropic provider
+        // BackModelInfo 必需字段
+        suggested_prefix_char_count: 10000,
+        suggested_suffix_char_count: 1000,
+        max_tokens: 8192,
+        supports_fim: true,
+        supports_chat: true,
+        supports_instruction: true,
+        // Agent 模式标志
+        chat_mode: "REMOTE_AGENT"
+    };
+    outputChannel.appendLine(`[GET-MODELS] Returning fake Claude model: ${fakeClaudeModelId} (actual: ${currentConfig.model})`);
     res.end(JSON.stringify({
-        models: [{ id: currentConfig.model, name: currentConfig.model, provider: currentConfig.provider }]
+        models: [modelInfo],
+        default_model: fakeClaudeModelId
     }));
 }
 // 聊天输入补全 - Augment 协议格式
@@ -1364,6 +1384,12 @@ function handleChatStream(req, res) {
                 outputChannel.appendLine(`[DEBUG] prefix length: ${augmentReq.prefix.length}`);
             if (augmentReq.suffix)
                 outputChannel.appendLine(`[DEBUG] suffix length: ${augmentReq.suffix.length}`);
+            // 调试 tool_definitions
+            if (augmentReq.tool_definitions) {
+                outputChannel.appendLine(`[DEBUG] tool_definitions: ${JSON.stringify(augmentReq.tool_definitions).substring(0, 500)}`);
+            } else {
+                outputChannel.appendLine(`[DEBUG] tool_definitions: undefined or null`);
+            }
             if (!currentConfig.apiKey) {
                 sendAugmentError(res, `No API key for ${currentConfig.provider}`);
                 return;
@@ -1928,6 +1954,19 @@ async function forwardToOpenAIStream(augmentReq, res) {
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     // 转换工具定义
     const rawTools = augmentReq.tool_definitions || [];
+    // 详细调试：打印原始 tool_definitions 结构
+    outputChannel.appendLine(`[DEBUG] tool_definitions count: ${rawTools.length}`);
+    if (rawTools.length > 0) {
+        outputChannel.appendLine(`[DEBUG] tool_definitions[0] keys: ${Object.keys(rawTools[0]).join(',')}`);
+        outputChannel.appendLine(`[DEBUG] tool_definitions[0] name: ${rawTools[0].name}`);
+        // 检查实际的 schema 字段名
+        const schemaFields = ['input_json_schema', 'input_schema_json', 'input_schema', 'parameters', 'schema'];
+        for (const field of schemaFields) {
+            if (rawTools[0][field] !== undefined) {
+                outputChannel.appendLine(`[DEBUG] tool_definitions[0].${field} exists, type: ${typeof rawTools[0][field]}`);
+            }
+        }
+    }
     const tools = convertToolDefinitionsToOpenAI(rawTools);
     outputChannel.appendLine(`[DEBUG] OpenAI tools: ${tools ? tools.length : 0} definitions`);
     // 构建 OpenAI 格式消息
@@ -1965,12 +2004,10 @@ async function forwardToOpenAIStream(augmentReq, res) {
         requestBody.tool_choice = 'auto';
     }
     const apiBody = JSON.stringify(requestBody);
-    // Append /chat/completions to baseUrl if not already present (for OpenAI-compatible APIs)
+    // 直接使用配置的 baseUrl，不再自动追加 /chat/completions
+    // 用户应该配置完整的 API endpoint
     let apiEndpoint = currentConfig.baseUrl;
-    if (!apiEndpoint.endsWith('/chat/completions')) {
-        apiEndpoint = apiEndpoint.replace(/\/$/, '') + '/chat/completions';
-    }
-    outputChannel.appendLine(`[API] Sending to ${apiEndpoint} with ${openaiMessages.length} messages`);
+    outputChannel.appendLine(`[API] Sending to ${apiEndpoint} with model=${requestBody.model}, messages=${openaiMessages.length}`);
     const url = new url_1.URL(apiEndpoint);
     const options = {
         hostname: url.hostname,
@@ -2000,11 +2037,25 @@ async function forwardToOpenAIStream(augmentReq, res) {
         const toolCalls = new Map();
         let hasToolUse = false;
         let finishReason = null;
+
+        // 添加错误和关闭事件监听
+        apiRes.on('error', (err: any) => {
+            outputChannel.appendLine(`[API ERROR] Response error: ${err.message}`);
+            sendAugmentError(res, err.message);
+        });
+
+        apiRes.on('close', () => {
+            outputChannel.appendLine(`[API] Response stream closed, chunks received: ${chunkCount}`);
+        });
+
         apiRes.on('data', (chunk: any) => {
             chunkCount++;
             const chunkStr = chunk.toString();
-            if (chunkCount === 1) {
-                outputChannel.appendLine(`[API] First chunk (${chunkStr.length} bytes): ${chunkStr.substring(0, 200)}...`);
+            // 前10个 chunk 都记录日志，方便调试
+            if (chunkCount <= 10) {
+                outputChannel.appendLine(`[API] Chunk #${chunkCount} (${chunkStr.length} bytes): ${chunkStr.substring(0, 300)}...`);
+            } else if (chunkCount % 50 === 0) {
+                outputChannel.appendLine(`[API] Chunk #${chunkCount} received`);
             }
             buffer += chunkStr;
             const lines = buffer.split('\n');
@@ -2012,8 +2063,12 @@ async function forwardToOpenAIStream(augmentReq, res) {
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     const data = line.slice(6).trim();
-                    if (!data || data === '[DONE]')
+                    if (!data || data === '[DONE]') {
+                        if (data === '[DONE]') {
+                            outputChannel.appendLine(`[API] Received [DONE] signal`);
+                        }
                         continue;
+                    }
                     try {
                         const event = JSON.parse(data);
                         const choice = event.choices?.[0];
@@ -2030,6 +2085,7 @@ async function forwardToOpenAIStream(augmentReq, res) {
                             if (!inThinking) {
                                 inThinking = true;
                                 res.write(JSON.stringify({ text: '<think>\n', nodes: [], stop_reason: 0 }) + '\n');
+                                outputChannel.appendLine(`[API] Started thinking block`);
                             }
                             res.write(JSON.stringify({ text: reasoningDelta, nodes: [], stop_reason: 0 }) + '\n');
                         }
@@ -2038,6 +2094,7 @@ async function forwardToOpenAIStream(augmentReq, res) {
                             if (inThinking) {
                                 inThinking = false;
                                 res.write(JSON.stringify({ text: '\n</think>\n\n', nodes: [], stop_reason: 0 }) + '\n');
+                                outputChannel.appendLine(`[API] Ended thinking block, starting content`);
                             }
                             res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n');
                         }
@@ -2235,6 +2292,134 @@ async function forwardToOpenAIStream(augmentReq, res) {
                         }
                         // ========== view 工具参数修正结束 ==========
 
+                        // ========== str-replace-editor 工具参数修正 ==========
+                        // GLM-4.7 生成的参数可能不符合要求：
+                        // - old_str_start_line_number / old_str_end_line_number 需要是正整数
+                        // - 可能缺少必需参数
+                        if (tc.name === 'str-replace-editor') {
+                            outputChannel.appendLine(`[STR-REPLACE FIX] Checking parameters: ${JSON.stringify(parsed)}`);
+
+                            // 确保 command 存在
+                            if (!parsed.command) {
+                                // 根据参数推断 command
+                                if (parsed.old_str_1 !== undefined || parsed.old_str !== undefined) {
+                                    parsed.command = 'str_replace';
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] Inferred command: str_replace`);
+                                } else if (parsed.insert_line_1 !== undefined || parsed.insert_line !== undefined) {
+                                    parsed.command = 'insert';
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] Inferred command: insert`);
+                                }
+                            }
+
+                            // 修正 instruction_reminder (可能缺失或不对)
+                            const expectedReminder = 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.';
+                            if (!parsed.instruction_reminder || typeof parsed.instruction_reminder !== 'string') {
+                                parsed.instruction_reminder = expectedReminder;
+                                outputChannel.appendLine(`[STR-REPLACE FIX] Added instruction_reminder`);
+                            }
+
+                            // 处理 str_replace 命令的参数
+                            if (parsed.command === 'str_replace') {
+                                // 修正参数名称 (GLM 可能用 old_str 而不是 old_str_1)
+                                if (parsed.old_str !== undefined && parsed.old_str_1 === undefined) {
+                                    parsed.old_str_1 = parsed.old_str;
+                                    delete parsed.old_str;
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str -> old_str_1`);
+                                }
+                                if (parsed.new_str !== undefined && parsed.new_str_1 === undefined) {
+                                    parsed.new_str_1 = parsed.new_str;
+                                    delete parsed.new_str;
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] new_str -> new_str_1`);
+                                }
+
+                                // 修正行号参数 - 必须是正整数
+                                const lineNumFields = [
+                                    'old_str_start_line_number_1', 'old_str_end_line_number_1',
+                                    'old_str_start_line_number_2', 'old_str_end_line_number_2',
+                                    'old_str_start_line_number_3', 'old_str_end_line_number_3',
+                                    // 也检查没有后缀的版本
+                                    'old_str_start_line_number', 'old_str_end_line_number'
+                                ];
+
+                                for (const field of lineNumFields) {
+                                    if (parsed[field] !== undefined) {
+                                        const original = parsed[field];
+                                        let num: number;
+
+                                        if (typeof original === 'string') {
+                                            // 字符串转数字
+                                            num = parseInt(original, 10);
+                                        } else if (typeof original === 'number') {
+                                            num = Math.floor(original);
+                                        } else {
+                                            // 无法解析，删除该字段让 Augment 报错
+                                            outputChannel.appendLine(`[STR-REPLACE FIX] Cannot parse ${field}: ${original}`);
+                                            continue;
+                                        }
+
+                                        if (isNaN(num) || num < 1) {
+                                            // 无效数字，尝试设置为 1
+                                            outputChannel.appendLine(`[STR-REPLACE FIX] Invalid ${field}: ${original}, setting to 1`);
+                                            num = 1;
+                                        }
+
+                                        if (original !== num) {
+                                            outputChannel.appendLine(`[STR-REPLACE FIX] ${field}: "${original}" -> ${num}`);
+                                            parsed[field] = num;
+                                        }
+                                    }
+                                }
+
+                                // 映射没有后缀的字段到带 _1 后缀的字段
+                                if (parsed.old_str_start_line_number !== undefined && parsed.old_str_start_line_number_1 === undefined) {
+                                    parsed.old_str_start_line_number_1 = parsed.old_str_start_line_number;
+                                    delete parsed.old_str_start_line_number;
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str_start_line_number -> old_str_start_line_number_1`);
+                                }
+                                if (parsed.old_str_end_line_number !== undefined && parsed.old_str_end_line_number_1 === undefined) {
+                                    parsed.old_str_end_line_number_1 = parsed.old_str_end_line_number;
+                                    delete parsed.old_str_end_line_number;
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str_end_line_number -> old_str_end_line_number_1`);
+                                }
+                            }
+
+                            // 处理 insert 命令的参数
+                            if (parsed.command === 'insert') {
+                                // 修正参数名称
+                                if (parsed.insert_line !== undefined && parsed.insert_line_1 === undefined) {
+                                    parsed.insert_line_1 = parsed.insert_line;
+                                    delete parsed.insert_line;
+                                    outputChannel.appendLine(`[STR-REPLACE FIX] insert_line -> insert_line_1`);
+                                }
+
+                                // insert_line_1 必须是非负整数
+                                if (parsed.insert_line_1 !== undefined) {
+                                    const original = parsed.insert_line_1;
+                                    let num: number;
+
+                                    if (typeof original === 'string') {
+                                        num = parseInt(original, 10);
+                                    } else if (typeof original === 'number') {
+                                        num = Math.floor(original);
+                                    } else {
+                                        num = 0;
+                                    }
+
+                                    if (isNaN(num) || num < 0) {
+                                        num = 0;
+                                    }
+
+                                    if (original !== num) {
+                                        outputChannel.appendLine(`[STR-REPLACE FIX] insert_line_1: "${original}" -> ${num}`);
+                                        parsed.insert_line_1 = num;
+                                    }
+                                }
+                            }
+
+                            outputChannel.appendLine(`[STR-REPLACE FIX] Final parameters: ${JSON.stringify(parsed)}`);
+                        }
+                        // ========== str-replace-editor 工具参数修正结束 ==========
+
                         // 特别检查 save-file 的参数
                         if (tc.name === 'save-file') {
                             outputChannel.appendLine(`[API] save-file raw arguments: ${tc.arguments}`);
@@ -2427,13 +2612,13 @@ function checkInjectionStatus() {
     }
     return false;
 }
-// 生成注入代码 - 完整版，与 Python 一致
+// 生成注入代码 - v8.0 恢复 v4.0 的显式端点匹配逻辑
 function generateInjectionCode(proxyUrl) {
     const timestamp = new Date().toISOString();
     return `
-// ===== AUGMENT CUSTOM MODEL INJECTION v4.0 =====
+// ===== AUGMENT CUSTOM MODEL INJECTION v8.0 =====
 // Injected at: ${timestamp}
-// 方案：将 Augment API 请求路由到本地代理服务器
+// v8.0: 恢复 v4.0 的显式端点匹配，修复 Agent 模式问题
 (function() {
     "use strict";
 
@@ -2443,7 +2628,7 @@ function generateInjectionCode(proxyUrl) {
         proxyUrl: '${proxyUrl}',
         debug: true,
         routeAllRequests: true,
-        proxyAvailable: false,  // 代理是否可用，启动时检测
+        proxyAvailable: false,
         checkInterval: null
     };
 
@@ -2453,7 +2638,7 @@ function generateInjectionCode(proxyUrl) {
     const checkProxyHealth = async () => {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 1000);  // 1秒超时
+            const timeout = setTimeout(() => controller.abort(), 1000);
             const resp = await fetch(CONFIG.proxyUrl + '/health', {
                 method: 'GET',
                 signal: controller.signal
@@ -2537,7 +2722,7 @@ function generateInjectionCode(proxyUrl) {
         }
     }, 500);
 
-    // ===== 核心：拦截 fetch 请求 =====
+    // ===== 核心：拦截 fetch 请求（恢复 v4.0 显式端点匹配）=====
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async function(url, options = {}) {
         if (!CONFIG.enabled) return originalFetch.call(this, url, options);
@@ -2554,7 +2739,7 @@ function generateInjectionCode(proxyUrl) {
             return originalFetch.call(this, url, options);
         }
 
-        // 提取端点路径 - 完整列表（与 Python 代理服务器完全一致）
+        // 提取端点路径 - 完整列表（与代理服务器完全一致）
         let endpoint = null;
         // 核心 AI 端点
         if (urlStr.includes('/chat-stream')) endpoint = '/chat-stream';
@@ -2567,6 +2752,11 @@ function generateInjectionCode(proxyUrl) {
         else if (urlStr.includes('/getPluginState')) endpoint = '/getPluginState';
         else if (urlStr.includes('/get-model-config')) endpoint = '/get-model-config';
         else if (urlStr.includes('/get-models')) endpoint = '/get-models';
+        // Agent 端点
+        else if (urlStr.includes('/agents/codebase-retrieval')) endpoint = '/agents/codebase-retrieval';
+        else if (urlStr.includes('/agents/edit-file')) endpoint = '/agents/edit-file';
+        else if (urlStr.includes('/agents/list-remote-tools')) endpoint = '/agents/list-remote-tools';
+        else if (urlStr.includes('/agents/run-remote-tool')) endpoint = '/agents/run-remote-tool';
         // 远程代理
         else if (urlStr.includes('/remote-agents/list-stream')) endpoint = '/remote-agents/list-stream';
         // 订阅和用户
@@ -2582,6 +2772,13 @@ function generateInjectionCode(proxyUrl) {
         // 遥测和事件
         else if (urlStr.includes('/client-completion-timelines')) endpoint = '/client-completion-timelines';
         else if (urlStr.includes('/record-session-events')) endpoint = '/record-session-events';
+        else if (urlStr.includes('/record-request-events')) endpoint = '/record-request-events';
+        // 其他
+        else if (urlStr.includes('/next-edit-stream')) endpoint = '/next-edit-stream';
+        else if (urlStr.includes('/find-missing')) endpoint = '/find-missing';
+        else if (urlStr.includes('/client-metrics')) endpoint = '/client-metrics';
+        else if (urlStr.includes('/batch-upload')) endpoint = '/batch-upload';
+        else if (urlStr.includes('/report-feature-vector')) endpoint = '/report-feature-vector';
         // 错误报告
         else if (urlStr.includes('/report-error')) endpoint = '/report-error';
 
@@ -2629,37 +2826,41 @@ function generateInjectionCode(proxyUrl) {
 
     // ===== 拦截 HTTP 模块（Node.js 环境）=====
     try {
-        const http = require('http');
         const https = require('https');
+        const http = require('http');
+        const originalHttpsRequest = https.request;
+        const originalHttpRequest = http.request;
 
         const getEndpoint = (url) => {
-            // 核心 AI 端点
             if (url.includes('/chat-stream')) return '/chat-stream';
             if (url.includes('/chat-input-completion')) return '/chat-input-completion';
             if (url.includes('/chat')) return '/chat';
             if (url.includes('/instruction-stream')) return '/instruction-stream';
             if (url.includes('/smart-paste-stream')) return '/smart-paste-stream';
             if (url.includes('/completion')) return '/completion';
-            // 插件状态和配置
             if (url.includes('/getPluginState')) return '/getPluginState';
             if (url.includes('/get-model-config')) return '/get-model-config';
             if (url.includes('/get-models')) return '/get-models';
-            // 远程代理
+            if (url.includes('/agents/codebase-retrieval')) return '/agents/codebase-retrieval';
+            if (url.includes('/agents/edit-file')) return '/agents/edit-file';
+            if (url.includes('/agents/list-remote-tools')) return '/agents/list-remote-tools';
+            if (url.includes('/agents/run-remote-tool')) return '/agents/run-remote-tool';
             if (url.includes('/remote-agents/list-stream')) return '/remote-agents/list-stream';
-            // 订阅和用户
             if (url.includes('/subscription-banner')) return '/subscription-banner';
             if (url.includes('/save-chat')) return '/save-chat';
-            // 用户密钥
             if (url.includes('/user-secrets/list')) return '/user-secrets/list';
             if (url.includes('/user-secrets/upsert')) return '/user-secrets/upsert';
             if (url.includes('/user-secrets/delete')) return '/user-secrets/delete';
-            // 通知
             if (url.includes('/notifications/mark-read')) return '/notifications/mark-read';
             if (url.includes('/notifications')) return '/notifications';
-            // 遥测和事件
             if (url.includes('/client-completion-timelines')) return '/client-completion-timelines';
             if (url.includes('/record-session-events')) return '/record-session-events';
-            // 错误报告
+            if (url.includes('/record-request-events')) return '/record-request-events';
+            if (url.includes('/next-edit-stream')) return '/next-edit-stream';
+            if (url.includes('/find-missing')) return '/find-missing';
+            if (url.includes('/client-metrics')) return '/client-metrics';
+            if (url.includes('/batch-upload')) return '/batch-upload';
+            if (url.includes('/report-feature-vector')) return '/report-feature-vector';
             if (url.includes('/report-error')) return '/report-error';
             return null;
         };
@@ -2674,49 +2875,42 @@ function generateInjectionCode(proxyUrl) {
                 }
 
                 const isAugmentApi = targetUrl.includes('augmentcode.com');
-                const endpoint = isAugmentApi ? getEndpoint(targetUrl) : null;
-
-                // 只有在代理可用时才拦截
-                if (CONFIG.enabled && CONFIG.proxyAvailable && endpoint) {
-                    log('[HTTP] Intercepted:', targetUrl);
-                    const proxyHost = new URL(CONFIG.proxyUrl);
-                    if (typeof urlOrOptions === 'object') {
-                        urlOrOptions.hostname = proxyHost.hostname;
-                        urlOrOptions.host = proxyHost.host;
-                        urlOrOptions.port = proxyHost.port || 8765;
-                        urlOrOptions.path = endpoint;
-                        urlOrOptions.protocol = 'http:';
-                        log('[HTTP] Routing to:', proxyHost.hostname + ':' + urlOrOptions.port + endpoint);
-                    }
-                } else if (isAugmentApi && !CONFIG.proxyAvailable) {
-                    log('[HTTP] Proxy not available, passing through:', targetUrl.substring(0, 80));
-                } else if (isAugmentApi) {
-                    log('[HTTP] Passing through:', targetUrl);
+                if (!CONFIG.enabled || !isAugmentApi || !CONFIG.proxyAvailable) {
+                    return originalRequest.apply(this, arguments);
                 }
 
-                return originalRequest.call(this, urlOrOptions, options, callback);
+                const endpoint = getEndpoint(targetUrl);
+                if (!endpoint) {
+                    log('HTTP: Passing through (no matching endpoint):', targetUrl.substring(0, 80));
+                    return originalRequest.apply(this, arguments);
+                }
+
+                log('HTTP: Intercepting ' + endpoint);
+                const proxyOptions = {
+                    hostname: 'localhost',
+                    port: 8765,
+                    path: endpoint,
+                    method: (typeof urlOrOptions === 'object' ? urlOrOptions.method : 'GET') || 'GET',
+                    headers: typeof urlOrOptions === 'object' ? urlOrOptions.headers : {}
+                };
+                proxyOptions.headers['Content-Type'] = 'application/json';
+                return originalHttpRequest.call(http, proxyOptions, typeof options === 'function' ? options : callback);
             };
         };
 
-        http.request = wrapRequest(http.request, 'http');
-        https.request = wrapRequest(https.request, 'https');
-        log('HTTP/HTTPS request interception enabled');
+        https.request = wrapRequest(originalHttpsRequest, 'https');
+        http.request = wrapRequest(originalHttpRequest, 'http');
+        log('Node.js https/http.request intercepted');
     } catch (e) {
-        log('HTTP interception not available (expected in browser context)');
+        log('Failed to intercept http modules:', e.message);
     }
 
-    // ===== 启动日志 =====
-    log('='.repeat(50));
-    log('Augment Proxy Injection v4.0 loaded!');
-    log('Proxy URL:', CONFIG.proxyUrl);
-    log('Enabled:', CONFIG.enabled);
-    log('');
-    log('Control in DevTools console:');
-    log('  __AUGMENT_PROXY__.status()');
-    log('  __AUGMENT_PROXY__.enable()');
-    log('  __AUGMENT_PROXY__.disable()');
-    log('  __AUGMENT_PROXY__.setProxyUrl("http://localhost:8765")');
-    log('='.repeat(50));
+    log('==================================================');
+    log('🎉 Augment Proxy Injection v8.0 loaded!');
+    log('   📌 Restored v4.0 explicit endpoint matching');
+    log('   Proxy URL:', CONFIG.proxyUrl);
+    log('   ⚠️  请确保代理服务器已启动');
+    log('==================================================');
 })();
 // ===== END AUGMENT PROXY INJECTION =====
 
