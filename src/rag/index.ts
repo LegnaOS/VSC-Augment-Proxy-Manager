@@ -176,15 +176,95 @@ export class BlobStorage {
     }
 }
 
+// ============ 查询缓存 - LRU实现 ============
+
+export class QueryCache<T> {
+    private cache: Map<string, { result: T; timestamp: number }> = new Map();
+    private maxSize: number;
+    private ttlMs: number;
+
+    constructor(maxSize: number = 100, ttlMs: number = 60000) {
+        this.maxSize = maxSize;
+        this.ttlMs = ttlMs;
+    }
+
+    get(key: string): T | undefined {
+        const entry = this.cache.get(key);
+        if (!entry) return undefined;
+
+        // 检查是否过期
+        if (Date.now() - entry.timestamp > this.ttlMs) {
+            this.cache.delete(key);
+            return undefined;
+        }
+
+        // LRU: 移到末尾
+        this.cache.delete(key);
+        this.cache.set(key, entry);
+        return entry.result;
+    }
+
+    set(key: string, result: T): void {
+        // 如果已存在，先删除
+        if (this.cache.has(key)) {
+            this.cache.delete(key);
+        }
+
+        // 如果达到最大容量，删除最老的
+        if (this.cache.size >= this.maxSize) {
+            const firstKey = this.cache.keys().next().value;
+            if (firstKey) this.cache.delete(firstKey);
+        }
+
+        this.cache.set(key, { result, timestamp: Date.now() });
+    }
+
+    clear(): void {
+        this.cache.clear();
+    }
+
+    size(): number {
+        return this.cache.size;
+    }
+}
+
 // ============ TF-IDF 搜索引擎 ============
+
+// 代码相关的停用词
+const CODE_STOP_WORDS = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'must', 'can', 'to', 'of', 'in', 'for', 'on',
+    'with', 'at', 'by', 'from', 'as', 'into', 'and', 'but', 'if', 'or',
+    'var', 'let', 'const', 'function', 'class', 'return', 'import', 'export',
+    'this', 'that', 'null', 'undefined', 'true', 'false', 'new', 'void',
+    'public', 'private', 'protected', 'static', 'async', 'await', 'try',
+    'catch', 'throw', 'finally', 'else', 'switch', 'case', 'break', 'continue'
+]);
+
+// 重要的入口文件名模式 - 这些文件应该获得更高权重
+const IMPORTANT_FILE_PATTERNS = [
+    /^index\.[jt]sx?$/i,
+    /^main\.[jt]sx?$/i,
+    /^app\.[jt]sx?$/i,
+    /^server\.[jt]sx?$/i,
+    /^extension\.[jt]s$/i,
+    /^mod\.rs$/i,
+    /^lib\.rs$/i,
+    /^__init__\.py$/i,
+    /package\.json$/i,
+    /tsconfig\.json$/i
+];
 
 export class TFIDFEngine {
     private documents: Map<string, IndexedDocument> = new Map();
     private idf: Map<string, number> = new Map();  // 逆文档频率
     private indexFile: string;
+    private queryCache: QueryCache<Array<{ path: string; score: number; matchedTerms: string[] }>>;
 
     constructor(cacheDir: string) {
         this.indexFile = path.join(cacheDir, 'tfidf-index.json');
+        this.queryCache = new QueryCache(100, 60000);  // 100条缓存，60秒过期
         this.load();
     }
 
@@ -225,26 +305,80 @@ export class TFIDFEngine {
         } catch { /* 忽略保存错误 */ }
     }
 
-    // 分词器 - 支持驼峰、下划线、中文
+    // 🔥 增强分词器 - 支持驼峰、下划线、代码符号、中文
     static tokenize(text: string): string[] {
         const tokens: string[] = [];
+        const seen = new Set<string>();
 
-        // 1. 分割驼峰命名 (camelCase -> camel, case)
-        text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
+        // 1. 提取完整的代码标识符 (保留原始形式)
+        const identifiers = text.match(/[a-zA-Z_$][a-zA-Z0-9_$]*/g) || [];
+        for (const id of identifiers) {
+            const lower = id.toLowerCase();
+            if (lower.length >= 2 && !CODE_STOP_WORDS.has(lower) && !seen.has(lower)) {
+                seen.add(lower);
+                tokens.push(lower);
+            }
+        }
 
-        // 2. 分割下划线和连字符
-        text = text.replace(/[_\-]/g, ' ');
-
-        // 3. 提取单词和中文字符
-        const words = text.toLowerCase().match(/[a-z0-9]+|[\u4e00-\u9fa5]+/g) || [];
-
-        for (const word of words) {
-            if (word.length >= 2) {  // 忽略单字符
+        // 2. 分割驼峰命名 (camelCase -> [camel, case])
+        const camelSplit = text.replace(/([a-z])([A-Z])/g, '$1 $2');
+        const camelWords = camelSplit.toLowerCase().match(/[a-z][a-z0-9]*/g) || [];
+        for (const word of camelWords) {
+            if (word.length >= 2 && !CODE_STOP_WORDS.has(word) && !seen.has(word)) {
+                seen.add(word);
                 tokens.push(word);
             }
         }
 
+        // 3. 分割下划线命名 (snake_case -> [snake, case])
+        const snakeParts = text.split(/[_\-]+/);
+        for (const part of snakeParts) {
+            const lower = part.toLowerCase();
+            if (lower.length >= 2 && !CODE_STOP_WORDS.has(lower) && !seen.has(lower)) {
+                seen.add(lower);
+                tokens.push(lower);
+            }
+        }
+
+        // 4. 提取中文词汇
+        const chinese = text.match(/[\u4e00-\u9fa5]+/g) || [];
+        for (const word of chinese) {
+            if (!seen.has(word)) {
+                seen.add(word);
+                tokens.push(word);
+            }
+        }
+
+        // 5. 提取数字标识符 (如 v2, http2, utf8)
+        const numericIds = text.match(/[a-z]+\d+|\d+[a-z]+/gi) || [];
+        for (const id of numericIds) {
+            const lower = id.toLowerCase();
+            if (!seen.has(lower)) {
+                seen.add(lower);
+                tokens.push(lower);
+            }
+        }
+
         return tokens;
+    }
+
+    // 🔥 从查询中提取搜索词 (用于精确匹配加分)
+    static extractExactTerms(query: string): string[] {
+        const terms: string[] = [];
+
+        // 提取引号中的精确匹配词
+        const quoted = query.match(/"([^"]+)"/g) || [];
+        for (const q of quoted) {
+            terms.push(q.replace(/"/g, '').toLowerCase());
+        }
+
+        // 提取看起来像代码标识符的词
+        const identifiers = query.match(/[a-zA-Z_$][a-zA-Z0-9_$]{2,}/g) || [];
+        for (const id of identifiers) {
+            terms.push(id.toLowerCase());
+        }
+
+        return [...new Set(terms)];
     }
 
     // 计算词频
@@ -287,23 +421,29 @@ export class TFIDFEngine {
         }
     }
 
-    // 搜索 - 返回TF-IDF分数最高的文档
+    // 🔥 增强搜索 - 支持缓存、权重加成
     search(query: string, topK: number = 10): Array<{ path: string; score: number; matchedTerms: string[] }> {
+        // 检查缓存
+        const cacheKey = `${query}:${topK}`;
+        const cached = this.queryCache.get(cacheKey);
+        if (cached) return cached;
+
         const queryTokens = TFIDFEngine.tokenize(query);
         if (queryTokens.length === 0) return [];
 
         const queryTermFreq = TFIDFEngine.computeTermFreq(queryTokens);
+        const exactTerms = TFIDFEngine.extractExactTerms(query);
         const results: Array<{ path: string; score: number; matchedTerms: string[] }> = [];
 
         for (const [docPath, doc] of this.documents) {
             let score = 0;
             const matchedTerms: string[] = [];
 
+            // 1. 基础TF-IDF分数
             for (const [term, queryFreq] of queryTermFreq) {
                 const docFreq = doc.termFreq.get(term) || 0;
                 if (docFreq > 0) {
                     const idf = this.idf.get(term) || 1;
-                    // TF-IDF = tf * idf
                     const tf = docFreq / doc.tokens.length;
                     score += tf * idf * queryFreq;
                     matchedTerms.push(term);
@@ -311,13 +451,55 @@ export class TFIDFEngine {
             }
 
             if (score > 0) {
+                // 2. 🔥 文件名匹配加成
+                const fileName = path.basename(docPath).toLowerCase();
+                const fileNameNoExt = fileName.replace(/\.[^.]+$/, '');
+                for (const term of exactTerms) {
+                    if (fileName.includes(term) || fileNameNoExt.includes(term)) {
+                        score *= 2.0;  // 文件名匹配，分数翻倍
+                        break;
+                    }
+                }
+
+                // 3. 🔥 路径匹配加成 (目录名包含关键词)
+                const pathLower = docPath.toLowerCase();
+                for (const term of exactTerms) {
+                    if (pathLower.includes('/' + term + '/') || pathLower.includes('\\' + term + '\\')) {
+                        score *= 1.3;  // 路径包含关键词，加30%
+                        break;
+                    }
+                }
+
+                // 4. 🔥 重要文件加成
+                for (const pattern of IMPORTANT_FILE_PATTERNS) {
+                    if (pattern.test(fileName)) {
+                        score *= 1.5;  // 入口文件加50%
+                        break;
+                    }
+                }
+
+                // 5. 🔥 匹配词数量加成
+                if (matchedTerms.length >= 3) {
+                    score *= 1.2;  // 匹配3个以上关键词，加20%
+                }
+
                 results.push({ path: docPath, score, matchedTerms });
             }
         }
 
         // 按分数排序
         results.sort((a, b) => b.score - a.score);
-        return results.slice(0, topK);
+        const finalResults = results.slice(0, topK);
+
+        // 缓存结果
+        this.queryCache.set(cacheKey, finalResults);
+
+        return finalResults;
+    }
+
+    // 清除查询缓存 (在索引更新时调用)
+    clearCache(): void {
+        this.queryCache.clear();
     }
 
     getDocument(filePath: string): IndexedDocument | undefined {
@@ -599,6 +781,20 @@ export class RAGContextIndex {
             this.indexFile(filePath, content, stat.mtimeMs, stat.size);
             this.mtimeCache.set(filePath, stat.mtimeMs);
             this.tfidfEngine.rebuildIDF();
+            this.tfidfEngine.clearCache();  // 🔥 清除查询缓存
+        } catch { /* 忽略错误 */ }
+    }
+
+    // 🔥 增量更新 - 添加内容（用于batch-upload）
+    addContentToIndex(filePath: string, content: string): void {
+        try {
+            if (content.length > this.config.maxFileSize) return;
+
+            const mtime = Date.now();
+            this.indexFile(filePath, content, mtime, content.length);
+            this.mtimeCache.set(filePath, mtime);
+            this.tfidfEngine.rebuildIDF();
+            this.tfidfEngine.clearCache();
         } catch { /* 忽略错误 */ }
     }
 
@@ -608,6 +804,30 @@ export class RAGContextIndex {
         this.blobStorage.delete(filePath);
         this.mtimeCache.delete(filePath);
         this.tfidfEngine.rebuildIDF();
+        this.tfidfEngine.clearCache();  // 🔥 清除查询缓存
+    }
+
+    // 🔥 批量添加到索引（用于batch-upload）
+    addBatchToIndex(files: Array<{ path: string; content: string }>): number {
+        let indexed = 0;
+        for (const file of files) {
+            try {
+                if (file.content.length <= this.config.maxFileSize) {
+                    const mtime = Date.now();
+                    this.indexFile(file.path, file.content, mtime, file.content.length);
+                    this.mtimeCache.set(file.path, mtime);
+                    indexed++;
+                }
+            } catch { /* 忽略单个文件错误 */ }
+        }
+
+        if (indexed > 0) {
+            this.tfidfEngine.rebuildIDF();
+            this.tfidfEngine.clearCache();
+            this.save();
+        }
+
+        return indexed;
     }
 
     // 获取统计信息

@@ -706,18 +706,67 @@ function handleRunRemoteTool(req, res) {
     });
 }
 
-// 处理 /next-edit-stream 请求 - 下一步编辑预测
+// 处理 /next-edit-stream 请求 - 🔥 基于上下文推荐相关代码
 function handleNextEditStream(req, res) {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', () => {
-        // 返回空的流式响应
-        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-        res.end(JSON.stringify({
-            chunks: [],
-            stop_reason: 1,
-            has_more: false
-        }) + '\n');
+    req.on('end', async () => {
+        try {
+            const data = JSON.parse(body);
+
+            // 请求格式：{ file_path: "当前文件", content: "当前内容", cursor_position: { line, character } }
+            const filePath = data.file_path || data.path || '';
+            const content = data.content || '';
+            const cursorLine = data.cursor_position?.line || 0;
+
+            // 如果没有RAG索引，返回空
+            if (!ragIndex || !filePath) {
+                res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+                res.end(JSON.stringify({ chunks: [], stop_reason: 1, has_more: false }) + '\n');
+                return;
+            }
+
+            // 提取当前编辑位置的上下文作为查询
+            const lines = content.split('\n');
+            const contextStart = Math.max(0, cursorLine - 5);
+            const contextEnd = Math.min(lines.length, cursorLine + 5);
+            const contextLines = lines.slice(contextStart, contextEnd).join('\n');
+
+            // 从当前上下文中提取关键词作为查询
+            const fileBaseName = path.basename(filePath).replace(/\.[^.]+$/, '');
+            const query = `${fileBaseName} ${contextLines}`;
+
+            // 搜索相关代码
+            const results = ragIndex.search(query, 3);
+
+            // 过滤掉当前文件
+            const relatedFiles = results.filter(r => !r.path.endsWith(path.basename(filePath)));
+
+            if (relatedFiles.length > 0) {
+                outputChannel.appendLine(`[NEXT-EDIT] Found ${relatedFiles.length} related files for ${filePath}`);
+
+                // 构建推荐响应
+                const suggestions = relatedFiles.map(r => ({
+                    file_path: r.path,
+                    relevance: r.score,
+                    matched_terms: r.highlights
+                }));
+
+                res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+                res.write(JSON.stringify({
+                    type: 'related_files',
+                    related_files: suggestions
+                }) + '\n');
+                res.end(JSON.stringify({ chunks: [], stop_reason: 1, has_more: false }) + '\n');
+            } else {
+                res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+                res.end(JSON.stringify({ chunks: [], stop_reason: 1, has_more: false }) + '\n');
+            }
+        } catch (error) {
+            outputChannel.appendLine(`[NEXT-EDIT] Error: ${error}`);
+            res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+            res.end(JSON.stringify({ chunks: [], stop_reason: 1, has_more: false }) + '\n');
+        }
     });
 }
 
@@ -765,17 +814,60 @@ function handleClientCompletionTimelines(req, res) {
     });
 }
 
-// 处理 /batch-upload 请求 - 批量上传文件块（本地同步模拟）
+// 处理 /batch-upload 请求 - 🔥 真正索引上传的文件到本地RAG
 function handleBatchUpload(req, res) {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
-    req.on('end', () => {
-        // 假装成功接收所有文件块 - 让 Augment 认为同步成功
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            success: true,
-            uploaded_count: 0 // 假装所有都已上传
-        }));
+    req.on('end', async () => {
+        try {
+            const data = JSON.parse(body);
+
+            // Augment 的 batch-upload 格式：
+            // { blobs: [{ name: "sha256hash", content: "文件内容" }], paths: { "sha256hash": "file/path.ts" } }
+            const blobs = data.blobs || [];
+            const pathMap = data.paths || {};
+
+            let indexedCount = 0;
+
+            if (ragIndex && blobs.length > 0) {
+                const filesToIndex: Array<{ path: string; content: string }> = [];
+
+                for (const blob of blobs) {
+                    const blobName = blob.name || blob.blob_name;
+                    const content = blob.content || blob.data;
+                    const filePath = pathMap[blobName];
+
+                    if (filePath && content && typeof content === 'string') {
+                        // 只索引代码文件
+                        const ext = path.extname(filePath).toLowerCase();
+                        const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue', '.svelte'];
+
+                        if (codeExtensions.includes(ext)) {
+                            filesToIndex.push({ path: filePath, content });
+                        }
+                    }
+                }
+
+                if (filesToIndex.length > 0) {
+                    indexedCount = ragIndex.addBatchToIndex(filesToIndex);
+                    outputChannel.appendLine(`[BATCH-UPLOAD] Indexed ${indexedCount}/${filesToIndex.length} files to local RAG`);
+                }
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                uploaded_count: blobs.length,
+                indexed_count: indexedCount  // 🔥 返回实际索引的数量
+            }));
+        } catch (error) {
+            outputChannel.appendLine(`[BATCH-UPLOAD] Error: ${error}`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                uploaded_count: 0
+            }));
+        }
     });
 }
 
