@@ -42,12 +42,15 @@ const os = __importStar(require("os"));
 const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 const url_1 = require("url");
+const { RAGContextIndex } = require('./rag');
+
 // ===== 全局状态 =====
 let proxyServer = null;
 let statusBarItem;
 let outputChannel;
 let sidebarProvider;
 let extensionContext;
+let ragIndex: any = null;  // RAG 索引实例
 // 当前配置
 let currentConfig = {
     provider: 'anthropic',
@@ -125,6 +128,11 @@ function activate(context) {
     // 注册命令
     context.subscriptions.push(vscode.commands.registerCommand('augmentProxy.startProxy', startProxy), vscode.commands.registerCommand('augmentProxy.stopProxy', stopProxy), vscode.commands.registerCommand('augmentProxy.configureProvider', configureProvider), vscode.commands.registerCommand('augmentProxy.showStatus', showStatus), vscode.commands.registerCommand('augmentProxy.injectPlugin', injectPlugin), vscode.commands.registerCommand('augmentProxy.restorePlugin', restorePlugin));
     outputChannel.appendLine('Augment Proxy Manager 已激活');
+
+    // 异步初始化 RAG 索引（不阻塞激活）
+    initializeRAGIndex().catch(err => {
+        outputChannel.appendLine(`[RAG] Background initialization failed: ${err}`);
+    });
 }
 function updateStatusBar(proxyRunning, injected = checkInjectionStatus()) {
     const proxyIcon = proxyRunning ? '$(radio-tower)' : '$(circle-slash)';
@@ -472,7 +480,34 @@ function extractKeywords(query: string): string[] {
     return [...new Set(words)];
 }
 
-// 处理 codebase-retrieval 请求
+// 初始化 RAG 索引
+async function initializeRAGIndex(): Promise<void> {
+    const roots = getWorkspaceRoots();
+    if (roots.length === 0) return;
+
+    const workspaceRoot = roots[0];  // 使用第一个工作区
+
+    try {
+        ragIndex = new RAGContextIndex({ workspaceRoot });
+        outputChannel.appendLine(`[RAG] Initializing index for ${workspaceRoot}...`);
+
+        const startTime = Date.now();
+        await ragIndex.initialize((current, total) => {
+            if (current % 500 === 0) {
+                outputChannel.appendLine(`[RAG] Indexing progress: ${current}/${total}`);
+            }
+        });
+
+        const stats = ragIndex.getStats();
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+        outputChannel.appendLine(`[RAG] Index ready: ${stats.documentCount} documents, checkpoint ${stats.checkpointId}, took ${elapsed}s`);
+    } catch (error) {
+        outputChannel.appendLine(`[RAG] Failed to initialize: ${error}`);
+        ragIndex = null;
+    }
+}
+
+// 处理 codebase-retrieval 请求 - 使用 RAG 索引
 function handleCodebaseRetrieval(req, res) {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
@@ -506,57 +541,76 @@ function handleCodebaseRetrieval(req, res) {
                 return;
             }
 
-            // 提取关键词
-            const keywords = extractKeywords(query);
-            outputChannel.appendLine(`[CODEBASE-RETRIEVAL] Keywords: ${keywords.join(', ')}`);
-
-            if (keywords.length === 0) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    formatted_retrieval: 'Could not extract meaningful keywords from the query.',
-                    unknown_blob_names: [],
-                    checkpoint_not_found: false
-                }));
-                return;
+            // 确保 RAG 索引已初始化
+            if (!ragIndex) {
+                await initializeRAGIndex();
             }
 
-            // 搜索文件
-            const extensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue', '.svelte'];
-            const allSnippets: CodeSnippet[] = [];
+            let formattedResult = '';
+            let snippetCount = 0;
 
-            for (const root of roots) {
-                const files = findFilesRecursive(root, extensions);
-                outputChannel.appendLine(`[CODEBASE-RETRIEVAL] Found ${files.length} files in ${root}`);
+            // 优先使用 RAG 索引搜索
+            if (ragIndex) {
+                const startTime = Date.now();
+                const results = ragIndex.search(query, 10);
+                const searchTime = Date.now() - startTime;
 
-                for (const file of files.slice(0, 500)) { // 限制搜索文件数量
-                    const snippets = searchInFile(file, keywords);
-                    for (const snippet of snippets) {
-                        // 使用相对路径
-                        snippet.path = path.relative(root, snippet.path);
-                        allSnippets.push(snippet);
+                outputChannel.appendLine(`[RAG] Search completed in ${searchTime}ms, found ${results.length} results`);
+
+                if (results.length > 0) {
+                    formattedResult = `Found ${results.length} relevant code snippets (RAG search):\n\n`;
+                    for (const result of results) {
+                        formattedResult += `## ${result.path} (lines ${result.lineStart}-${result.lineEnd})\n`;
+                        formattedResult += `*Matched: ${result.highlights.join(', ')}*\n`;
+                        formattedResult += '```\n';
+                        formattedResult += result.content;
+                        formattedResult += '\n```\n\n';
+                    }
+                    snippetCount = results.length;
+                }
+            }
+
+            // 如果 RAG 没有结果，回退到简单关键词搜索
+            if (snippetCount === 0) {
+                outputChannel.appendLine(`[CODEBASE-RETRIEVAL] RAG returned no results, falling back to keyword search`);
+
+                const keywords = extractKeywords(query);
+                if (keywords.length > 0) {
+                    const extensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.vue', '.svelte'];
+                    const allSnippets: CodeSnippet[] = [];
+
+                    for (const root of roots) {
+                        const files = findFilesRecursive(root, extensions);
+                        for (const file of files.slice(0, 300)) {
+                            const snippets = searchInFile(file, keywords);
+                            for (const snippet of snippets) {
+                                snippet.path = path.relative(root, snippet.path);
+                                allSnippets.push(snippet);
+                            }
+                        }
+                    }
+
+                    allSnippets.sort((a, b) => b.score - a.score);
+                    const topSnippets = allSnippets.slice(0, 10);
+
+                    if (topSnippets.length > 0) {
+                        formattedResult = `Found ${topSnippets.length} relevant code snippets (keyword search):\n\n`;
+                        for (const snippet of topSnippets) {
+                            formattedResult += `## ${snippet.path} (lines ${snippet.lineStart}-${snippet.lineEnd})\n`;
+                            formattedResult += '```\n';
+                            formattedResult += snippet.content;
+                            formattedResult += '\n```\n\n';
+                        }
+                        snippetCount = topSnippets.length;
                     }
                 }
             }
 
-            // 按分数排序，取前10个
-            allSnippets.sort((a, b) => b.score - a.score);
-            const topSnippets = allSnippets.slice(0, 10);
-
-            // 格式化输出
-            let formattedResult = '';
-            if (topSnippets.length === 0) {
+            if (snippetCount === 0) {
                 formattedResult = `No matching code found for: "${query}"`;
-            } else {
-                formattedResult = `Found ${topSnippets.length} relevant code snippets:\n\n`;
-                for (const snippet of topSnippets) {
-                    formattedResult += `## ${snippet.path} (lines ${snippet.lineStart}-${snippet.lineEnd})\n`;
-                    formattedResult += '```\n';
-                    formattedResult += snippet.content;
-                    formattedResult += '\n```\n\n';
-                }
             }
 
-            outputChannel.appendLine(`[CODEBASE-RETRIEVAL] Found ${topSnippets.length} snippets`);
+            outputChannel.appendLine(`[CODEBASE-RETRIEVAL] Returning ${snippetCount} snippets`);
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
