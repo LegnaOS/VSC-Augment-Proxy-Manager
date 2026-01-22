@@ -1843,6 +1843,31 @@ function convertToolDefinitionsToOpenAI(toolDefs) {
     if (!toolDefs || toolDefs.length === 0)
         return undefined;
     const tools = [];
+
+    // ===== 添加 codebase_search 工具（使用本地 RAG 索引） =====
+    // 这个工具让 AI 可以主动搜索项目代码库和文档
+    if (ragIndex) {
+        tools.push({
+            type: 'function',
+            function: {
+                name: 'codebase_search',
+                description: '搜索项目代码库和文档，查找相关代码片段。在需要了解项目结构、查找特定功能实现、或查阅文档时使用此工具。优先使用此工具而不是盲目浏览文件。',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        query: {
+                            type: 'string',
+                            description: '搜索查询，描述你要找的代码、功能或文档内容。例如："精灵图片区域参数"、"用户登录验证逻辑"、"ListView API 文档"'
+                        }
+                    },
+                    required: ['query'],
+                    additionalProperties: false
+                }
+            }
+        });
+        outputChannel.appendLine(`[RAG] Added codebase_search tool to available tools`);
+    }
+
     for (const def of toolDefs) {
         // Augment 格式: { name, description, input_json_schema }
         // OpenAI 格式: { type: "function", function: { name, description, parameters } }
@@ -2240,6 +2265,59 @@ async function forwardToOpenAIStream(augmentReq, res) {
                 for (const [idx, tc] of toolCalls) {
                     outputChannel.appendLine(`[API] Sending tool_use: idx=${idx}, id=${tc.id}, name=${tc.name}`);
                     outputChannel.appendLine(`[API] Tool arguments (full): ${tc.arguments}`);
+
+                    // ========== codebase_search 工具拦截 ==========
+                    // 本地执行 RAG 搜索，直接返回结果给用户
+                    if (tc.name === 'codebase_search' && ragIndex) {
+                        try {
+                            const searchArgs = JSON.parse(tc.arguments || '{}');
+                            const query = searchArgs.query || '';
+
+                            outputChannel.appendLine(`[RAG] Executing local codebase search: "${query}"`);
+
+                            const startTime = Date.now();
+                            const results = ragIndex.search(query, 8);
+                            const searchTime = Date.now() - startTime;
+
+                            outputChannel.appendLine(`[RAG] Search completed in ${searchTime}ms, found ${results.length} results`);
+
+                            // 格式化搜索结果
+                            let resultText = `\n\n---\n**🔍 代码库搜索** (查询: "${query}", 耗时: ${searchTime}ms)\n\n`;
+
+                            if (results.length > 0) {
+                                for (const r of results) {
+                                    resultText += `### 📄 ${r.path}`;
+                                    if (r.lineStart && r.lineEnd) {
+                                        resultText += ` (行 ${r.lineStart}-${r.lineEnd})`;
+                                    }
+                                    resultText += '\n';
+                                    if (r.highlights && r.highlights.length > 0) {
+                                        resultText += `*匹配: ${r.highlights.slice(0, 5).join(', ')}*\n`;
+                                    }
+                                    resultText += '```\n' + r.content + '\n```\n\n';
+                                }
+                            } else {
+                                resultText += '*未找到相关代码。请尝试其他关键词或使用 view 工具浏览文件。*\n';
+                            }
+                            resultText += '---\n\n';
+
+                            // 发送搜索结果作为 text（不作为 tool_use）
+                            res.write(JSON.stringify({ text: resultText, nodes: [], stop_reason: 0 }) + '\n');
+
+                            // 跳过发送 tool_use 给 Augment（因为这是本地处理的工具）
+                            continue;
+                        } catch (e) {
+                            outputChannel.appendLine(`[RAG] Search error: ${e}`);
+                            // 搜索失败时，发送错误信息
+                            res.write(JSON.stringify({
+                                text: `\n\n⚠️ 代码库搜索失败: ${e}\n\n`,
+                                nodes: [],
+                                stop_reason: 0
+                            }) + '\n');
+                            continue;
+                        }
+                    }
+                    // ========== codebase_search 工具拦截结束 ==========
 
                     // 警告：如果参数为空，可能是模型返回格式不兼容
                     if (!tc.arguments || tc.arguments === '' || tc.arguments === '{}') {
