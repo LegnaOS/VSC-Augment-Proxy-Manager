@@ -2052,601 +2052,543 @@ function augmentToOpenAIMessages(req) {
     }
     return messages;
 }
+// ========== OpenAI API 请求结果接口 ==========
+interface OpenAIRequestResult {
+    text: string;                    // 累积的文本内容（包含 thinking 标签）
+    toolCalls: Array<{               // 工具调用列表
+        id: string;
+        name: string;
+        arguments: string;           // JSON 字符串
+    }>;
+    finishReason: string | null;     // 结束原因: 'stop', 'tool_calls', 'length' 等
+    thinkingContent: string;         // 思考内容（用于调试）
+}
+
+// ========== 执行单次 OpenAI API 请求 ==========
+// 返回结构化结果，不直接写入响应流
+async function executeOpenAIRequest(
+    messages: any[],
+    tools: any[],
+    apiEndpoint: string,
+    apiKey: string,
+    model: string
+): Promise<OpenAIRequestResult> {
+    return new Promise((resolve, reject) => {
+        const requestBody: any = {
+            model: model,
+            max_tokens: 115000,
+            messages: messages,
+            stream: true
+        };
+
+        if (tools && tools.length > 0) {
+            requestBody.tools = tools;
+            requestBody.tool_choice = 'auto';
+        }
+
+        const apiBody = JSON.stringify(requestBody);
+        const url = new url_1.URL(apiEndpoint);
+
+        const options = {
+            hostname: url.hostname,
+            port: url.port || 443,
+            path: url.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            }
+        };
+
+        outputChannel.appendLine(`[API-EXEC] Sending request to ${apiEndpoint}, messages=${messages.length}`);
+
+        const result: OpenAIRequestResult = {
+            text: '',
+            toolCalls: [],
+            finishReason: null,
+            thinkingContent: ''
+        };
+
+        let buffer = '';
+        let inThinking = false;
+        const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
+
+        const apiReq = https.request(options, (apiRes: any) => {
+            if (apiRes.statusCode !== 200) {
+                let errorBody = '';
+                apiRes.on('data', (c: any) => errorBody += c);
+                apiRes.on('end', () => {
+                    outputChannel.appendLine(`[API-EXEC ERROR] Status ${apiRes.statusCode}: ${errorBody.slice(0, 300)}`);
+                    reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 100)}`));
+                });
+                return;
+            }
+
+            apiRes.on('data', (chunk: any) => {
+                buffer += chunk.toString();
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6).trim();
+                        if (!data || data === '[DONE]') continue;
+
+                        try {
+                            const event = JSON.parse(data);
+                            const choice = event.choices?.[0];
+                            const delta = choice?.delta?.content || '';
+                            const reasoningDelta = choice?.delta?.reasoning_content || '';
+                            const toolCallsDelta = choice?.delta?.tool_calls;
+
+                            if (choice?.finish_reason) {
+                                result.finishReason = choice.finish_reason;
+                            }
+
+                            // 处理思考内容
+                            if (reasoningDelta) {
+                                if (!inThinking) {
+                                    inThinking = true;
+                                    result.text += '<think>\n';
+                                }
+                                result.text += reasoningDelta;
+                                result.thinkingContent += reasoningDelta;
+                            }
+
+                            // 处理正常内容
+                            if (delta) {
+                                if (inThinking) {
+                                    inThinking = false;
+                                    result.text += '\n</think>\n\n';
+                                }
+                                result.text += delta;
+                            }
+
+                            // 处理工具调用
+                            if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
+                                for (const tc of toolCallsDelta) {
+                                    const idx = tc.index ?? 0;
+
+                                    if (!toolCallsMap.has(idx)) {
+                                        toolCallsMap.set(idx, {
+                                            id: tc.id || `tool_${idx}_${Date.now()}`,
+                                            name: tc.function?.name || '',
+                                            arguments: ''
+                                        });
+                                    }
+
+                                    const state = toolCallsMap.get(idx)!;
+                                    if (tc.id) state.id = tc.id;
+                                    if (tc.function?.name) state.name = tc.function.name;
+
+                                    const argsValue = tc.function?.arguments || tc.function?.parameters || tc.arguments || tc.parameters;
+                                    if (argsValue !== undefined && argsValue !== null) {
+                                        state.arguments += typeof argsValue === 'object' ? JSON.stringify(argsValue) : argsValue;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // 解析错误，继续处理
+                        }
+                    }
+                }
+            });
+
+            apiRes.on('end', () => {
+                // 关闭思考模式
+                if (inThinking) {
+                    result.text += '\n</think>\n\n';
+                }
+
+                // 转换工具调用
+                for (const [_, tc] of toolCallsMap) {
+                    result.toolCalls.push(tc);
+                }
+
+                outputChannel.appendLine(`[API-EXEC] Request complete: text_len=${result.text.length}, tool_calls=${result.toolCalls.length}, finish=${result.finishReason}`);
+                resolve(result);
+            });
+
+            apiRes.on('error', (err: any) => {
+                reject(err);
+            });
+        });
+
+        apiReq.on('error', (err: any) => {
+            outputChannel.appendLine(`[API-EXEC ERROR] Request failed: ${err.message}`);
+            reject(err);
+        });
+
+        apiReq.on('timeout', () => {
+            apiReq.destroy();
+            reject(new Error('Request timeout'));
+        });
+
+        apiReq.write(apiBody);
+        apiReq.end();
+    });
+}
+
+// ========== 执行本地 RAG 搜索并格式化结果 ==========
+function executeRAGSearch(query: string): string {
+    if (!ragIndex) {
+        return '⚠️ RAG 索引未初始化';
+    }
+
+    const startTime = Date.now();
+    const results = ragIndex.search(query, 8);
+    const searchTime = Date.now() - startTime;
+
+    outputChannel.appendLine(`[RAG] Search "${query.substring(0, 50)}..." completed in ${searchTime}ms, found ${results.length} results`);
+
+    if (results.length === 0) {
+        return `未找到与 "${query}" 相关的代码。请尝试其他关键词。`;
+    }
+
+    // 格式化搜索结果 - 简洁明了
+    let output = `搜索 "${query}" 找到 ${results.length} 个相关文件 (${searchTime}ms):\n\n`;
+
+    for (const r of results) {
+        const score = (r.score * 100).toFixed(1);
+        output += `📄 **${r.path}** (相关度: ${score}%)\n`;
+
+        // 显示匹配的关键词
+        if (r.matchedTerms && r.matchedTerms.length > 0) {
+            output += `   匹配: ${r.matchedTerms.slice(0, 5).join(', ')}\n`;
+        }
+
+        // 显示代码片段（限制行数）
+        const lines = r.content.split('\n');
+        const previewLines = lines.slice(0, 15);
+        const preview = previewLines.join('\n');
+
+        output += '```\n' + preview;
+        if (lines.length > 15) {
+            output += `\n... (还有 ${lines.length - 15} 行)\n`;
+        }
+        output += '\n```\n\n';
+    }
+
+    return output;
+}
+
+// ========== 检查是否只有 codebase_search 工具调用 ==========
+function hasOnlyCodebaseSearchCalls(toolCalls: Array<{ name: string }>): boolean {
+    if (toolCalls.length === 0) return false;
+    return toolCalls.every(tc => tc.name === 'codebase_search');
+}
+
+// ========== 过滤出 codebase_search 工具调用 ==========
+function filterCodebaseSearchCalls(toolCalls: Array<{ id: string; name: string; arguments: string }>): Array<{ id: string; query: string }> {
+    return toolCalls
+        .filter(tc => tc.name === 'codebase_search')
+        .map(tc => {
+            try {
+                const args = JSON.parse(tc.arguments || '{}');
+                return { id: tc.id, query: args.query || '' };
+            } catch {
+                return { id: tc.id, query: '' };
+            }
+        });
+}
+
 // 转发到 OpenAI 格式 API (流式，发送增量)
 // 注意：OpenAI 格式不完全支持多模态，图片会转为描述文本
-async function forwardToOpenAIStream(augmentReq, res) {
+// 🔥 v1.5.0: 支持 codebase_search 工具循环调用
+async function forwardToOpenAIStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     // 提取工作区信息，用于后续路径修正
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     // 转换工具定义
     const rawTools = augmentReq.tool_definitions || [];
-    // 详细调试：打印原始 tool_definitions 结构
     outputChannel.appendLine(`[DEBUG] tool_definitions count: ${rawTools.length}`);
-    if (rawTools.length > 0) {
-        outputChannel.appendLine(`[DEBUG] tool_definitions[0] keys: ${Object.keys(rawTools[0]).join(',')}`);
-        outputChannel.appendLine(`[DEBUG] tool_definitions[0] name: ${rawTools[0].name}`);
-        // 检查实际的 schema 字段名
-        const schemaFields = ['input_json_schema', 'input_schema_json', 'input_schema', 'parameters', 'schema'];
-        for (const field of schemaFields) {
-            if (rawTools[0][field] !== undefined) {
-                outputChannel.appendLine(`[DEBUG] tool_definitions[0].${field} exists, type: ${typeof rawTools[0][field]}`);
-            }
-        }
-    }
+
     const tools = convertToolDefinitionsToOpenAI(rawTools);
     outputChannel.appendLine(`[DEBUG] OpenAI tools: ${tools ? tools.length : 0} definitions`);
+
     // 构建 OpenAI 格式消息
-    const openaiMessages = [];
+    const openaiMessages: any[] = [];
     if (system) {
         openaiMessages.push({ role: 'system', content: system });
     }
+
     // 使用专门的 OpenAI 消息转换函数
     const convertedMessages = augmentToOpenAIMessages(augmentReq);
     openaiMessages.push(...convertedMessages);
     outputChannel.appendLine(`[DEBUG] OpenAI messages: ${openaiMessages.length} total`);
-    for (let i = 0; i < openaiMessages.length; i++) {
-        const msg = openaiMessages[i];
-        if (msg.tool_calls) {
-            outputChannel.appendLine(`[DEBUG] msg[${i}]: role=${msg.role}, tool_calls=${msg.tool_calls.length}`);
-        }
-        else if (msg.tool_call_id) {
-            outputChannel.appendLine(`[DEBUG] msg[${i}]: role=${msg.role}, tool_call_id=${msg.tool_call_id}`);
-        }
-        else {
-            outputChannel.appendLine(`[DEBUG] msg[${i}]: role=${msg.role}, content_len=${(msg.content || '').length}`);
-        }
-    }
-    // 构建请求体
-    // max_tokens 设为 GLM-4.7/4.6 最大输出 128K 的 90% ≈ 115000
-    const requestBody: any = {
-        model: currentConfig.model,
-        max_tokens: 115000,
-        messages: openaiMessages,
-        stream: true
-    };
-    // 添加工具定义
-    if (tools && tools.length > 0) {
-        requestBody.tools = tools;
-        requestBody.tool_choice = 'auto';
-    }
-    const apiBody = JSON.stringify(requestBody);
-    // 直接使用配置的 baseUrl，不再自动追加 /chat/completions
-    // 用户应该配置完整的 API endpoint
-    let apiEndpoint = currentConfig.baseUrl;
-    outputChannel.appendLine(`[API] Sending to ${apiEndpoint} with model=${requestBody.model}, messages=${openaiMessages.length}`);
-    const url = new url_1.URL(apiEndpoint);
-    const options = {
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${currentConfig.apiKey}`
-        }
-    };
-    const apiReq = https.request(options, (apiRes: any) => {
-        if (apiRes.statusCode !== 200) {
-            let errorBody = '';
-            apiRes.on('data', (c: any) => errorBody += c);
-            apiRes.on('end', () => {
-                outputChannel.appendLine(`[API ERROR] Status ${apiRes.statusCode}: ${errorBody.slice(0, 200)}`);
-                sendAugmentError(res, `API Error ${apiRes.statusCode}`);
-            });
-            return;
-        }
-        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-        let buffer = '';
-        let chunkCount = 0;
-        outputChannel.appendLine(`[API] OpenAI response started, status=${apiRes.statusCode}`);
-        let inThinking = false; // 跟踪是否在思考模式中
-        const toolCalls = new Map();
-        let hasToolUse = false;
-        let finishReason = null;
 
-        // 添加错误和关闭事件监听
-        apiRes.on('error', (err: any) => {
-            outputChannel.appendLine(`[API ERROR] Response error: ${err.message}`);
-            sendAugmentError(res, err.message);
-        });
+    const apiEndpoint = currentConfig.baseUrl;
+    const apiKey = currentConfig.apiKey;
+    const model = currentConfig.model;
 
-        apiRes.on('close', () => {
-            outputChannel.appendLine(`[API] Response stream closed, chunks received: ${chunkCount}`);
-        });
+    // ========== 🔥 codebase_search 循环调用逻辑 ==========
+    // 最多循环 5 次防止无限循环
+    const MAX_ITERATIONS = 5;
+    let iteration = 0;
+    let currentMessages = [...openaiMessages];
+    let accumulatedText = '';  // 累积所有文本输出
 
-        apiRes.on('data', (chunk: any) => {
-            chunkCount++;
-            const chunkStr = chunk.toString();
-            // 前10个 chunk 都记录日志，方便调试
-            if (chunkCount <= 10) {
-                outputChannel.appendLine(`[API] Chunk #${chunkCount} (${chunkStr.length} bytes): ${chunkStr.substring(0, 300)}...`);
-            } else if (chunkCount % 50 === 0) {
-                outputChannel.appendLine(`[API] Chunk #${chunkCount} received`);
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+
+    try {
+        while (iteration < MAX_ITERATIONS) {
+            iteration++;
+            outputChannel.appendLine(`[LOOP] Iteration ${iteration}/${MAX_ITERATIONS}`);
+
+            // 执行 API 请求
+            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model);
+
+            // 发送文本内容到 Augment
+            if (result.text) {
+                res.write(JSON.stringify({ text: result.text, nodes: [], stop_reason: 0 }) + '\n');
+                accumulatedText += result.text;
             }
-            buffer += chunkStr;
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6).trim();
-                    if (!data || data === '[DONE]') {
-                        if (data === '[DONE]') {
-                            outputChannel.appendLine(`[API] Received [DONE] signal`);
+
+            // 检查是否有工具调用
+            if (result.toolCalls.length === 0 || result.finishReason === 'stop') {
+                // 没有工具调用，正常结束
+                outputChannel.appendLine(`[LOOP] No tool calls or stop, ending loop`);
+                res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
+                res.end();
+                return;
+            }
+
+            // 分离 codebase_search 调用和其他工具调用
+            const codebaseSearchCalls = filterCodebaseSearchCalls(result.toolCalls);
+            const otherToolCalls = result.toolCalls.filter(tc => tc.name !== 'codebase_search');
+
+            outputChannel.appendLine(`[LOOP] Tool calls: codebase_search=${codebaseSearchCalls.length}, other=${otherToolCalls.length}`);
+
+            // 如果有其他工具调用，需要转发给 Augment 处理
+            if (otherToolCalls.length > 0) {
+                outputChannel.appendLine(`[LOOP] Has other tool calls, forwarding to Augment`);
+
+                // 如果同时有 codebase_search 调用，先执行它们并添加到消息中
+                if (codebaseSearchCalls.length > 0) {
+                    // 构造 assistant 消息（只包含 codebase_search 调用）
+                    const csToolCalls = codebaseSearchCalls.map((cs, idx) => ({
+                        id: cs.id,
+                        type: 'function',
+                        function: {
+                            name: 'codebase_search',
+                            arguments: JSON.stringify({ query: cs.query })
                         }
-                        continue;
+                    }));
+
+                    currentMessages.push({
+                        role: 'assistant',
+                        content: result.text || null,
+                        tool_calls: csToolCalls
+                    });
+
+                    // 执行 RAG 搜索并添加结果
+                    for (const cs of codebaseSearchCalls) {
+                        const searchResult = executeRAGSearch(cs.query);
+                        currentMessages.push({
+                            role: 'tool',
+                            tool_call_id: cs.id,
+                            content: searchResult
+                        });
+
+                        // 发送搜索结果摘要给用户（可选）
+                        res.write(JSON.stringify({
+                            text: `\n\n📚 **已搜索代码库** (查询: "${cs.query.substring(0, 30)}...")\n\n`,
+                            nodes: [],
+                            stop_reason: 0
+                        }) + '\n');
                     }
-                    try {
-                        const event = JSON.parse(data);
-                        const choice = event.choices?.[0];
-                        const delta = choice?.delta?.content || '';
-                        const reasoningDelta = choice?.delta?.reasoning_content || '';
-                        const toolCallsDelta = choice?.delta?.tool_calls;
-                        // 记录 finish_reason
-                        if (choice?.finish_reason) {
-                            finishReason = choice.finish_reason;
-                            outputChannel.appendLine(`[API] finish_reason: ${finishReason}`);
-                        }
-                        // 处理思考内容
-                        if (reasoningDelta) {
-                            if (!inThinking) {
-                                inThinking = true;
-                                res.write(JSON.stringify({ text: '<think>\n', nodes: [], stop_reason: 0 }) + '\n');
-                                outputChannel.appendLine(`[API] Started thinking block`);
-                            }
-                            res.write(JSON.stringify({ text: reasoningDelta, nodes: [], stop_reason: 0 }) + '\n');
-                        }
-                        // 处理正常内容
-                        if (delta) {
-                            if (inThinking) {
-                                inThinking = false;
-                                res.write(JSON.stringify({ text: '\n</think>\n\n', nodes: [], stop_reason: 0 }) + '\n');
-                                outputChannel.appendLine(`[API] Ended thinking block, starting content`);
-                            }
-                            res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n');
-                        }
-                        // 处理工具调用 (OpenAI 格式，兼容 GLM 等模型)
-                        if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
-                            for (const tc of toolCallsDelta) {
-                                const idx = tc.index ?? 0;
 
-                                // 调试：记录原始 tool_call 结构
-                                outputChannel.appendLine(`[API] Raw tool_call delta: ${JSON.stringify(tc)}`);
+                    // 继续下一轮循环（可能还会产生 codebase_search 调用）
+                    continue;
+                }
 
-                                if (!toolCalls.has(idx)) {
-                                    // 新工具调用
-                                    toolCalls.set(idx, {
-                                        id: tc.id || `tool_${idx}_${Date.now()}`,
-                                        name: tc.function?.name || '',
-                                        arguments: ''
-                                    });
-                                    outputChannel.appendLine(`[API] Tool call start: idx=${idx}, id=${tc.id}, name=${tc.function?.name}`);
-                                }
-                                const state = toolCalls.get(idx);
-                                // 累积 id 和 name (可能在后续 chunk 中)
-                                if (tc.id)
-                                    state.id = tc.id;
-                                if (tc.function?.name)
-                                    state.name = tc.function.name;
-
-                                // 累积 arguments (兼容多种格式)
-                                // 1. OpenAI 标准格式: tc.function.arguments (字符串)
-                                // 2. GLM 可能的格式: tc.function.parameters 或 tc.arguments
-                                // 3. 某些模型可能返回对象而不是字符串
-                                let argsValue = tc.function?.arguments
-                                    || tc.function?.parameters
-                                    || tc.arguments
-                                    || tc.parameters;
-
-                                if (argsValue !== undefined && argsValue !== null) {
-                                    // 如果是对象，转为 JSON 字符串
-                                    if (typeof argsValue === 'object') {
-                                        argsValue = JSON.stringify(argsValue);
-                                        outputChannel.appendLine(`[API] Converted object arguments to string: ${argsValue}`);
-                                    }
-                                    state.arguments += argsValue;
-                                    outputChannel.appendLine(`[API] Accumulated arguments: ${state.arguments}`);
-                                }
-                            }
-                        }
-                    }
-                    catch (e) {
-                        outputChannel.appendLine(`[API] Parse error: ${e}`);
+                // 没有 codebase_search，直接转发其他工具调用给 Augment
+                for (const tc of otherToolCalls) {
+                    const toolNode = await processToolCallForAugment(tc, workspaceInfo, result.finishReason);
+                    if (toolNode) {
+                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
                     }
                 }
+
+                // 结束流，让 Augment 处理工具调用
+                res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
+                res.end();
+                return;
             }
-        });
-        apiRes.on('end', () => {
-            // 关闭思考模式
-            if (inThinking) {
-                res.write(JSON.stringify({ text: '\n</think>\n\n', nodes: [], stop_reason: 0 }) + '\n');
-            }
-            // 发送所有累积的工具调用
-            if (toolCalls.size > 0) {
-                for (const [idx, tc] of toolCalls) {
-                    outputChannel.appendLine(`[API] Sending tool_use: idx=${idx}, id=${tc.id}, name=${tc.name}`);
-                    outputChannel.appendLine(`[API] Tool arguments (full): ${tc.arguments}`);
 
-                    // ========== codebase_search 工具拦截 ==========
-                    // 本地执行 RAG 搜索，直接返回结果给用户
-                    if (tc.name === 'codebase_search' && ragIndex) {
-                        try {
-                            const searchArgs = JSON.parse(tc.arguments || '{}');
-                            const query = searchArgs.query || '';
+            // 只有 codebase_search 调用，执行本地 RAG 搜索并继续循环
+            if (codebaseSearchCalls.length > 0) {
+                outputChannel.appendLine(`[LOOP] Processing ${codebaseSearchCalls.length} codebase_search calls`);
 
-                            outputChannel.appendLine(`[RAG] Executing local codebase search: "${query}"`);
-
-                            const startTime = Date.now();
-                            const results = ragIndex.search(query, 8);
-                            const searchTime = Date.now() - startTime;
-
-                            outputChannel.appendLine(`[RAG] Search completed in ${searchTime}ms, found ${results.length} results`);
-
-                            // 格式化搜索结果
-                            let resultText = `\n\n---\n**🔍 代码库搜索** (查询: "${query}", 耗时: ${searchTime}ms)\n\n`;
-
-                            if (results.length > 0) {
-                                for (const r of results) {
-                                    resultText += `### 📄 ${r.path}`;
-                                    if (r.lineStart && r.lineEnd) {
-                                        resultText += ` (行 ${r.lineStart}-${r.lineEnd})`;
-                                    }
-                                    resultText += '\n';
-                                    if (r.highlights && r.highlights.length > 0) {
-                                        resultText += `*匹配: ${r.highlights.slice(0, 5).join(', ')}*\n`;
-                                    }
-                                    resultText += '```\n' + r.content + '\n```\n\n';
-                                }
-                            } else {
-                                resultText += '*未找到相关代码。请尝试其他关键词或使用 view 工具浏览文件。*\n';
-                            }
-                            resultText += '---\n\n';
-
-                            // 发送搜索结果作为 text（不作为 tool_use）
-                            res.write(JSON.stringify({ text: resultText, nodes: [], stop_reason: 0 }) + '\n');
-
-                            // 跳过发送 tool_use 给 Augment（因为这是本地处理的工具）
-                            continue;
-                        } catch (e) {
-                            outputChannel.appendLine(`[RAG] Search error: ${e}`);
-                            // 搜索失败时，发送错误信息
-                            res.write(JSON.stringify({
-                                text: `\n\n⚠️ 代码库搜索失败: ${e}\n\n`,
-                                nodes: [],
-                                stop_reason: 0
-                            }) + '\n');
-                            continue;
-                        }
+                // 构造 assistant 消息（包含 tool_calls）
+                const toolCallsForMsg = codebaseSearchCalls.map((cs, idx) => ({
+                    id: cs.id,
+                    type: 'function',
+                    function: {
+                        name: 'codebase_search',
+                        arguments: JSON.stringify({ query: cs.query })
                     }
-                    // ========== codebase_search 工具拦截结束 ==========
+                }));
 
-                    // 警告：如果参数为空，可能是模型返回格式不兼容
-                    if (!tc.arguments || tc.arguments === '' || tc.arguments === '{}') {
-                        outputChannel.appendLine(`[WARN] Tool ${tc.name} has empty arguments! This may indicate incompatible model response format.`);
-                        outputChannel.appendLine(`[WARN] Check if the model uses a different field name for function arguments.`);
-                    }
+                currentMessages.push({
+                    role: 'assistant',
+                    content: result.text || null,
+                    tool_calls: toolCallsForMsg
+                });
 
-                    // 验证并规范化 JSON
-                    let inputJson = tc.arguments || '{}';
-                    try {
-                        const parsed = JSON.parse(tc.arguments);
-                        outputChannel.appendLine(`[API] Tool input parsed keys: ${Object.keys(parsed).join(',')}`);
+                // 执行每个 RAG 搜索并添加结果
+                for (const cs of codebaseSearchCalls) {
+                    const searchResult = executeRAGSearch(cs.query);
 
-                        // ========== 路径修正逻辑 ==========
-                        // Augment 的文件工具使用 repository_root 作为基准路径
-                        // 如果用户打开的是仓库的子目录，需要把相对路径转换为相对于仓库根目录的路径
-                        const fileTools = ['save-file', 'view', 'remove-files', 'str-replace-editor'];
-                        if (fileTools.includes(tc.name) && workspaceInfo) {
-                            const workspacePath = workspaceInfo.workspacePath || '';
-                            const repoRoot = workspaceInfo.repositoryRoot || '';
+                    // 添加 tool result 到消息
+                    currentMessages.push({
+                        role: 'tool',
+                        tool_call_id: cs.id,
+                        content: searchResult
+                    });
 
-                            // 计算工作区相对于仓库根目录的前缀
-                            let relativePrefix = '';
-                            if (repoRoot && workspacePath && workspacePath.startsWith(repoRoot) && workspacePath !== repoRoot) {
-                                relativePrefix = workspacePath.substring(repoRoot.length).replace(/^\//, '');
-                            }
-
-                            if (relativePrefix) {
-                                // 修正 path 参数
-                                if (parsed.path && typeof parsed.path === 'string' && !parsed.path.startsWith('/') && !parsed.path.startsWith(relativePrefix)) {
-                                    const originalPath = parsed.path;
-                                    parsed.path = relativePrefix + '/' + parsed.path;
-                                    outputChannel.appendLine(`[PATH FIX] ${tc.name}: "${originalPath}" -> "${parsed.path}" (prefix: ${relativePrefix})`);
-                                }
-
-                                // 修正 file_paths 参数 (用于 remove-files)
-                                if (parsed.file_paths && Array.isArray(parsed.file_paths)) {
-                                    parsed.file_paths = parsed.file_paths.map((p: string) => {
-                                        if (typeof p === 'string' && !p.startsWith('/') && !p.startsWith(relativePrefix)) {
-                                            const newPath = relativePrefix + '/' + p;
-                                            outputChannel.appendLine(`[PATH FIX] ${tc.name} file_paths: "${p}" -> "${newPath}"`);
-                                            return newPath;
-                                        }
-                                        return p;
-                                    });
-                                }
-                            }
-                        }
-                        // ========== 路径修正逻辑结束 ==========
-
-                        // ========== Playwright 工具参数修正 ==========
-                        // GLM 生成的参数可能与 Playwright MCP 期望的不匹配
-                        if (tc.name.includes('Playwright')) {
-                            // 1. browser_wait_for_Playwright: time 参数需要是数字
-                            if (tc.name === 'browser_wait_for_Playwright') {
-                                if (parsed.time !== undefined && typeof parsed.time === 'string') {
-                                    const numTime = parseInt(parsed.time, 10);
-                                    if (!isNaN(numTime)) {
-                                        outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: time "${parsed.time}" -> ${numTime}`);
-                                        parsed.time = numTime;
-                                    }
-                                }
-                                // wait_time -> time 映射
-                                if (parsed.wait_time !== undefined && parsed.time === undefined) {
-                                    const numTime = typeof parsed.wait_time === 'string' ? parseInt(parsed.wait_time, 10) : parsed.wait_time;
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_wait_for: wait_time -> time = ${numTime}`);
-                                    parsed.time = numTime;
-                                    delete parsed.wait_time;
-                                }
-                            }
-                            // 2. browser_run_code_Playwright: 不需要修正，MCP 期望 'code' 参数
-                            // GLM 生成的 'code' 参数名是正确的
-
-                            // 3. browser_click_Playwright: selector -> element + ref
-                            if (tc.name === 'browser_click_Playwright') {
-                                // GLM 可能用 'selector' 而不是 'element' + 'ref'
-                                if (parsed.selector !== undefined && parsed.element === undefined) {
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_click: selector -> element + ref`);
-                                    // 尝试解析 selector，格式可能是 "generic ref=e63" 或 "canvas"
-                                    const selectorStr = String(parsed.selector);
-                                    const refMatch = selectorStr.match(/ref=(\w+)/);
-                                    if (refMatch) {
-                                        // 有 ref 信息，提取它
-                                        parsed.ref = refMatch[1];
-                                        // element 描述去掉 ref 部分
-                                        parsed.element = selectorStr.replace(/\s*ref=\w+/, '').trim() || 'element';
-                                    } else {
-                                        // 没有 ref，用 selector 作为 element 描述
-                                        parsed.element = selectorStr;
-                                        // ref 需要从页面快照获取，这里无法自动填充
-                                        // 但至少提供 element 描述
-                                    }
-                                    delete parsed.selector;
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_click result: element="${parsed.element}", ref="${parsed.ref || 'undefined'}"`);
-                                }
-                            }
-
-                            // 4. browser_evaluate_Playwright: expression/code -> function
-                            if (tc.name === 'browser_evaluate_Playwright') {
-                                if (parsed.expression !== undefined && parsed.function === undefined) {
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: expression -> function`);
-                                    parsed.function = parsed.expression;
-                                    delete parsed.expression;
-                                }
-                                // GLM 有时用 'code' 而不是 'expression'
-                                if (parsed.code !== undefined && parsed.function === undefined) {
-                                    outputChannel.appendLine(`[PLAYWRIGHT FIX] browser_evaluate: code -> function`);
-                                    parsed.function = parsed.code;
-                                    delete parsed.code;
-                                }
-                            }
-                        }
-                        // ========== Playwright 工具参数修正结束 ==========
-
-                        // ========== view 工具参数修正 ==========
-                        // GLM 模型可能把 view_range 数组参数生成为字符串格式 "[1, 200]"
-                        // 需要转换为真正的数组 [1, 200]
-                        if (tc.name === 'view' && parsed.view_range !== undefined) {
-                            if (typeof parsed.view_range === 'string') {
-                                try {
-                                    // 尝试解析字符串格式的数组 "[1, 200]"
-                                    const viewRangeParsed = JSON.parse(parsed.view_range);
-                                    if (Array.isArray(viewRangeParsed) && viewRangeParsed.length === 2) {
-                                        outputChannel.appendLine(`[VIEW FIX] view_range: "${parsed.view_range}" -> [${viewRangeParsed[0]}, ${viewRangeParsed[1]}]`);
-                                        parsed.view_range = viewRangeParsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
-                                    }
-                                } catch (e) {
-                                    outputChannel.appendLine(`[VIEW FIX] Failed to parse view_range: ${parsed.view_range}`);
-                                }
-                            }
-                        }
-                        // ========== view 工具参数修正结束 ==========
-
-                        // ========== str-replace-editor 工具参数修正 ==========
-                        // GLM-4.7 生成的参数可能不符合要求：
-                        // - old_str_start_line_number / old_str_end_line_number 需要是正整数
-                        // - 可能缺少必需参数
-                        if (tc.name === 'str-replace-editor') {
-                            outputChannel.appendLine(`[STR-REPLACE FIX] Checking parameters: ${JSON.stringify(parsed)}`);
-
-                            // 确保 command 存在
-                            if (!parsed.command) {
-                                // 根据参数推断 command
-                                if (parsed.old_str_1 !== undefined || parsed.old_str !== undefined) {
-                                    parsed.command = 'str_replace';
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] Inferred command: str_replace`);
-                                } else if (parsed.insert_line_1 !== undefined || parsed.insert_line !== undefined) {
-                                    parsed.command = 'insert';
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] Inferred command: insert`);
-                                }
-                            }
-
-                            // 修正 instruction_reminder (可能缺失或不对)
-                            const expectedReminder = 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.';
-                            if (!parsed.instruction_reminder || typeof parsed.instruction_reminder !== 'string') {
-                                parsed.instruction_reminder = expectedReminder;
-                                outputChannel.appendLine(`[STR-REPLACE FIX] Added instruction_reminder`);
-                            }
-
-                            // 处理 str_replace 命令的参数
-                            if (parsed.command === 'str_replace') {
-                                // 修正参数名称 (GLM 可能用 old_str 而不是 old_str_1)
-                                if (parsed.old_str !== undefined && parsed.old_str_1 === undefined) {
-                                    parsed.old_str_1 = parsed.old_str;
-                                    delete parsed.old_str;
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str -> old_str_1`);
-                                }
-                                if (parsed.new_str !== undefined && parsed.new_str_1 === undefined) {
-                                    parsed.new_str_1 = parsed.new_str;
-                                    delete parsed.new_str;
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] new_str -> new_str_1`);
-                                }
-
-                                // 修正行号参数 - 必须是正整数
-                                const lineNumFields = [
-                                    'old_str_start_line_number_1', 'old_str_end_line_number_1',
-                                    'old_str_start_line_number_2', 'old_str_end_line_number_2',
-                                    'old_str_start_line_number_3', 'old_str_end_line_number_3',
-                                    // 也检查没有后缀的版本
-                                    'old_str_start_line_number', 'old_str_end_line_number'
-                                ];
-
-                                for (const field of lineNumFields) {
-                                    if (parsed[field] !== undefined) {
-                                        const original = parsed[field];
-                                        let num: number;
-
-                                        if (typeof original === 'string') {
-                                            // 字符串转数字
-                                            num = parseInt(original, 10);
-                                        } else if (typeof original === 'number') {
-                                            num = Math.floor(original);
-                                        } else {
-                                            // 无法解析，删除该字段让 Augment 报错
-                                            outputChannel.appendLine(`[STR-REPLACE FIX] Cannot parse ${field}: ${original}`);
-                                            continue;
-                                        }
-
-                                        if (isNaN(num) || num < 1) {
-                                            // 无效数字，尝试设置为 1
-                                            outputChannel.appendLine(`[STR-REPLACE FIX] Invalid ${field}: ${original}, setting to 1`);
-                                            num = 1;
-                                        }
-
-                                        if (original !== num) {
-                                            outputChannel.appendLine(`[STR-REPLACE FIX] ${field}: "${original}" -> ${num}`);
-                                            parsed[field] = num;
-                                        }
-                                    }
-                                }
-
-                                // 映射没有后缀的字段到带 _1 后缀的字段
-                                if (parsed.old_str_start_line_number !== undefined && parsed.old_str_start_line_number_1 === undefined) {
-                                    parsed.old_str_start_line_number_1 = parsed.old_str_start_line_number;
-                                    delete parsed.old_str_start_line_number;
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str_start_line_number -> old_str_start_line_number_1`);
-                                }
-                                if (parsed.old_str_end_line_number !== undefined && parsed.old_str_end_line_number_1 === undefined) {
-                                    parsed.old_str_end_line_number_1 = parsed.old_str_end_line_number;
-                                    delete parsed.old_str_end_line_number;
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] old_str_end_line_number -> old_str_end_line_number_1`);
-                                }
-                            }
-
-                            // 处理 insert 命令的参数
-                            if (parsed.command === 'insert') {
-                                // 修正参数名称
-                                if (parsed.insert_line !== undefined && parsed.insert_line_1 === undefined) {
-                                    parsed.insert_line_1 = parsed.insert_line;
-                                    delete parsed.insert_line;
-                                    outputChannel.appendLine(`[STR-REPLACE FIX] insert_line -> insert_line_1`);
-                                }
-
-                                // insert_line_1 必须是非负整数
-                                if (parsed.insert_line_1 !== undefined) {
-                                    const original = parsed.insert_line_1;
-                                    let num: number;
-
-                                    if (typeof original === 'string') {
-                                        num = parseInt(original, 10);
-                                    } else if (typeof original === 'number') {
-                                        num = Math.floor(original);
-                                    } else {
-                                        num = 0;
-                                    }
-
-                                    if (isNaN(num) || num < 0) {
-                                        num = 0;
-                                    }
-
-                                    if (original !== num) {
-                                        outputChannel.appendLine(`[STR-REPLACE FIX] insert_line_1: "${original}" -> ${num}`);
-                                        parsed.insert_line_1 = num;
-                                    }
-                                }
-                            }
-
-                            outputChannel.appendLine(`[STR-REPLACE FIX] Final parameters: ${JSON.stringify(parsed)}`);
-                        }
-                        // ========== str-replace-editor 工具参数修正结束 ==========
-
-                        // 特别检查 save-file 的参数
-                        if (tc.name === 'save-file') {
-                            outputChannel.appendLine(`[API] save-file raw arguments: ${tc.arguments}`);
-                            // 检查 GLM 是否用了错误的参数名
-                            // GLM 可能用 'content' 或 'file' 而不是 'file_content'
-                            if (parsed.content !== undefined && parsed.file_content === undefined) {
-                                outputChannel.appendLine(`[API] save-file: mapping 'content' to 'file_content'`);
-                                parsed.file_content = parsed.content;
-                                delete parsed.content;
-                            }
-                            if (parsed.file !== undefined && parsed.file_content === undefined) {
-                                outputChannel.appendLine(`[API] save-file: mapping 'file' to 'file_content'`);
-                                parsed.file_content = parsed.file;
-                                delete parsed.file;
-                            }
-                            outputChannel.appendLine(`[API] save-file file_content length: ${(parsed.file_content || '').length}`);
-                            outputChannel.appendLine(`[API] save-file path: ${parsed.path}`);
-                        }
-                        inputJson = JSON.stringify(parsed);
-                    }
-                    catch (e) {
-                        outputChannel.appendLine(`[API] Tool arguments parse error: ${e}`);
-                        // 如果是因为输出被截断导致的 JSON 解析错误，跳过这个工具调用
-                        if (finishReason === 'length') {
-                            outputChannel.appendLine(`[API] Skipping truncated tool call: ${tc.name} (finish_reason=length)`);
-                            // 发送错误提示给用户
-                            res.write(JSON.stringify({
-                                text: `\n\n⚠️ 工具调用被截断: ${tc.name} - 文件内容过长，请尝试分段处理或减少内容长度。\n\n`,
-                                nodes: [],
-                                stop_reason: 0
-                            }) + '\n');
-                            continue; // 跳过这个工具调用
-                        }
-                    }
-                    const toolNode = {
-                        type: 5, // TOOL_USE
-                        tool_use: {
-                            tool_use_id: tc.id,
-                            tool_name: tc.name,
-                            input_json: inputJson
-                        }
-                    };
-                    const responseData = { text: '', nodes: [toolNode], stop_reason: 0 };
-                    outputChannel.appendLine(`[API] Sending to Augment: ${JSON.stringify(responseData).substring(0, 500)}...`);
-                    res.write(JSON.stringify(responseData) + '\n');
-                    hasToolUse = true;
+                    // 发送搜索进度提示给用户
+                    res.write(JSON.stringify({
+                        text: `\n\n🔍 **代码库搜索** (查询: "${cs.query}")\n${searchResult.split('\n').slice(0, 5).join('\n')}...\n\n`,
+                        nodes: [],
+                        stop_reason: 0
+                    }) + '\n');
                 }
+
+                outputChannel.appendLine(`[LOOP] Added tool results, continuing to next iteration`);
+                // 继续下一轮循环
+                continue;
             }
-            // stop_reason: 1=正常结束, 3=工具调用
-            const stopReason = hasToolUse ? 3 : 1;
-            res.write(JSON.stringify({ text: '', nodes: [], stop_reason: stopReason }) + '\n');
-            res.end();
-            outputChannel.appendLine(`[API] Stream complete, chunks=${chunkCount}, toolCalls=${toolCalls.size}, stopReason=${stopReason}`);
-        });
-    });
-    apiReq.on('error', (err) => {
-        outputChannel.appendLine(`[API ERROR] Request failed: ${err.message}`);
-        sendAugmentError(res, err.message);
-    });
-    apiReq.on('timeout', () => {
-        outputChannel.appendLine(`[API ERROR] Request timeout`);
-        apiReq.destroy();
-        sendAugmentError(res, 'Request timeout');
-    });
-    apiReq.write(apiBody);
-    apiReq.end();
-    outputChannel.appendLine(`[API] Request sent, waiting for response...`);
+        }
+
+        // 达到最大迭代次数
+        outputChannel.appendLine(`[LOOP] Max iterations reached`);
+        res.write(JSON.stringify({
+            text: '\n\n⚠️ 已达到最大工具调用次数限制。\n',
+            nodes: [],
+            stop_reason: 1
+        }) + '\n');
+        res.end();
+
+    } catch (error: any) {
+        outputChannel.appendLine(`[LOOP ERROR] ${error.message}`);
+        sendAugmentError(res, error.message);
+    }
 }
+
+// ========== 处理工具调用并转换为 Augment 格式 ==========
+async function processToolCallForAugment(
+    tc: { id: string; name: string; arguments: string },
+    workspaceInfo: any,
+    finishReason: string | null
+): Promise<any> {
+    outputChannel.appendLine(`[TOOL] Processing: ${tc.name}, id=${tc.id}`);
+
+    // 警告：如果参数为空，可能是模型返回格式不兼容
+    if (!tc.arguments || tc.arguments === '' || tc.arguments === '{}') {
+        outputChannel.appendLine(`[WARN] Tool ${tc.name} has empty arguments!`);
+    }
+
+    let inputJson = tc.arguments || '{}';
+
+    try {
+        const parsed = JSON.parse(tc.arguments);
+
+        // ========== 路径修正逻辑 ==========
+        const fileTools = ['save-file', 'view', 'remove-files', 'str-replace-editor'];
+        if (fileTools.includes(tc.name) && workspaceInfo) {
+            const workspacePath = workspaceInfo.workspacePath || '';
+            const repoRoot = workspaceInfo.repositoryRoot || '';
+
+            let relativePrefix = '';
+            if (repoRoot && workspacePath && workspacePath.startsWith(repoRoot) && workspacePath !== repoRoot) {
+                relativePrefix = workspacePath.substring(repoRoot.length).replace(/^\//, '');
+            }
+
+            if (relativePrefix) {
+                if (parsed.path && typeof parsed.path === 'string' && !parsed.path.startsWith('/') && !parsed.path.startsWith(relativePrefix)) {
+                    parsed.path = relativePrefix + '/' + parsed.path;
+                    outputChannel.appendLine(`[PATH FIX] ${tc.name}: path fixed with prefix ${relativePrefix}`);
+                }
+
+                if (parsed.file_paths && Array.isArray(parsed.file_paths)) {
+                    parsed.file_paths = parsed.file_paths.map((p: string) => {
+                        if (typeof p === 'string' && !p.startsWith('/') && !p.startsWith(relativePrefix)) {
+                            return relativePrefix + '/' + p;
+                        }
+                        return p;
+                    });
+                }
+            }
+        }
+
+        // ========== view 工具参数修正 ==========
+        if (tc.name === 'view' && parsed.view_range !== undefined) {
+            if (typeof parsed.view_range === 'string') {
+                try {
+                    const viewRangeParsed = JSON.parse(parsed.view_range);
+                    if (Array.isArray(viewRangeParsed) && viewRangeParsed.length === 2) {
+                        parsed.view_range = viewRangeParsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
+                    }
+                } catch (e) { /* ignore */ }
+            }
+        }
+
+        // ========== str-replace-editor 工具参数修正 ==========
+        if (tc.name === 'str-replace-editor') {
+            if (!parsed.command) {
+                if (parsed.old_str_1 !== undefined || parsed.old_str !== undefined) {
+                    parsed.command = 'str_replace';
+                } else if (parsed.insert_line_1 !== undefined || parsed.insert_line !== undefined) {
+                    parsed.command = 'insert';
+                }
+            }
+
+            const expectedReminder = 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.';
+            if (!parsed.instruction_reminder) {
+                parsed.instruction_reminder = expectedReminder;
+            }
+
+            // 参数名称映射
+            if (parsed.old_str !== undefined && parsed.old_str_1 === undefined) {
+                parsed.old_str_1 = parsed.old_str;
+                delete parsed.old_str;
+            }
+            if (parsed.new_str !== undefined && parsed.new_str_1 === undefined) {
+                parsed.new_str_1 = parsed.new_str;
+                delete parsed.new_str;
+            }
+        }
+
+        // ========== save-file 工具参数修正 ==========
+        if (tc.name === 'save-file') {
+            if (parsed.content !== undefined && parsed.file_content === undefined) {
+                parsed.file_content = parsed.content;
+                delete parsed.content;
+            }
+        }
+
+        inputJson = JSON.stringify(parsed);
+
+    } catch (e) {
+        outputChannel.appendLine(`[TOOL] Arguments parse error: ${e}`);
+        if (finishReason === 'length') {
+            outputChannel.appendLine(`[TOOL] Skipping truncated tool call`);
+            return null;
+        }
+    }
+
+    return {
+        type: 5, // TOOL_USE
+        tool_use: {
+            tool_use_id: tc.id,
+            tool_name: tc.name,
+            input_json: inputJson
+        }
+    };
+}
+
+
 async function startProxy() {
     if (proxyServer) {
         vscode.window.showWarningMessage('代理服务器已在运行');
