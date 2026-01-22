@@ -176,6 +176,41 @@
             "anthropic",
             "openai"
           ]
+        },
+        "augmentProxy.embedding.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用语义搜索 (需要配置 Embedding API Key)"
+        },
+        "augmentProxy.embedding.provider": {
+          "type": "string",
+          "default": "glm",
+          "enum": [
+            "glm",
+            "openai",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "智谱 GLM embedding-3",
+            "OpenAI text-embedding-3-small",
+            "自定义 Embedding API"
+          ],
+          "description": "Embedding 供应商"
+        },
+        "augmentProxy.embedding.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Embedding API Key (留空则使用 LLM 的 API Key)"
+        },
+        "augmentProxy.embedding.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "自定义 Embedding API 地址 (仅 custom 模式)"
+        },
+        "augmentProxy.embedding.model": {
+          "type": "string",
+          "default": "",
+          "description": "自定义 Embedding 模型名称 (留空使用默认)"
         }
       }
     }
@@ -192,7 +227,6 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
     "level": "^10.0.0"
   }
 }

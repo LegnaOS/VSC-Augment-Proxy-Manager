@@ -687,8 +687,14 @@ export class RAGContextIndex {
         this.mtimeCache = new MtimeCache(this.config.cacheDir);
         this.blobStorage = new BlobStorage(this.config.cacheDir);
         this.tfidfEngine = new TFIDFEngine(this.config.cacheDir);
-        // 🔥 v1.6.0: 初始化语义引擎
-        this.semanticEngine = new SemanticEmbeddings(this.config.cacheDir, onProgress);
+        // 🔥 v1.6.0: 语义引擎由外部配置（不在构造函数中初始化）
+        this.semanticEngine = null;
+    }
+
+    // 🔥 v1.6.0: 设置语义搜索引擎（由 extension.ts 调用）
+    setSemanticEngine(engine: SemanticEmbeddings): void {
+        this.semanticEngine = engine;
+        this.onProgress?.('[RAG] Semantic engine configured');
     }
 
     // 🔥 初始化 LevelDB 存储层
@@ -701,13 +707,6 @@ export class RAGContextIndex {
         ]);
         this.loadCheckpoint();
         this.storageReady = true;
-
-        // 🔥 v1.6.0: 异步初始化语义引擎（不阻塞主流程）
-        if (this.semanticEngine) {
-            this.semanticEngine.initialize().catch(() => {
-                this.onProgress?.('[RAG] Semantic engine failed to initialize, using BM25 fallback');
-            });
-        }
     }
 
     private loadCheckpoint(): void {

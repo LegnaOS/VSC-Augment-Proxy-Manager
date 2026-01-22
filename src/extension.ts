@@ -43,6 +43,7 @@ const http = __importStar(require("http"));
 const https = __importStar(require("https"));
 const url_1 = require("url");
 const { RAGContextIndex } = require('./rag');
+const { SemanticEmbeddings } = require('./rag/embeddings');
 
 // ===== 全局状态 =====
 let proxyServer = null;
@@ -51,6 +52,7 @@ let outputChannel;
 let sidebarProvider;
 let extensionContext;
 let ragIndex: any = null;  // RAG 索引实例
+let semanticEngine: any = null;  // 语义嵌入引擎
 
 // ===== 会话级请求队列 =====
 // 防止同一会话的并发请求导致工具在 checkingSafety 阶段被取消
@@ -542,6 +544,50 @@ async function initializeRAGIndex(): Promise<void> {
         const stats = ragIndex.getStats();
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         outputChannel.appendLine(`[RAG] Index ready: ${stats.documentCount} documents, checkpoint ${stats.checkpointId}, took ${elapsed}s`);
+
+        // 🔥 v1.6.0: 配置语义搜索引擎
+        const config = vscode.workspace.getConfiguration('augmentProxy');
+        const embeddingEnabled = config.get('embedding.enabled', false) as boolean;
+
+        if (embeddingEnabled) {
+            const provider = (config.get('embedding.provider', 'glm') || 'glm') as 'glm' | 'openai' | 'custom';
+            let apiKey = (config.get('embedding.apiKey', '') || '') as string;
+            const baseUrl = (config.get('embedding.baseUrl', '') || '') as string;
+            const model = (config.get('embedding.model', '') || '') as string;
+
+            // 如果没有单独配置 embedding apiKey，尝试使用当前 provider 的 apiKey
+            if (!apiKey) {
+                const currentProvider = (config.get('provider', 'anthropic') || 'anthropic') as string;
+                // 从环境变量或密钥存储中获取 (这里简化处理，实际应该从 secretStorage 获取)
+                if (provider === 'glm' || currentProvider === 'glm') {
+                    apiKey = process.env.GLM_API_KEY || '';
+                } else if (provider === 'openai' || currentProvider === 'openai') {
+                    apiKey = process.env.OPENAI_API_KEY || '';
+                }
+            }
+
+            if (apiKey) {
+                semanticEngine = new SemanticEmbeddings(
+                    path.join(workspaceRoot, '.augment-rag'),
+                    (msg: string) => outputChannel.appendLine(msg)
+                );
+
+                semanticEngine.configure({
+                    provider,
+                    apiKey,
+                    baseUrl: baseUrl || undefined,
+                    model: model || undefined
+                });
+
+                await semanticEngine.initialize();
+                ragIndex.setSemanticEngine(semanticEngine);
+                outputChannel.appendLine(`[RAG] 🧠 Semantic search enabled with ${provider}`);
+            } else {
+                outputChannel.appendLine(`[RAG] ⚠️ Embedding enabled but no API key configured`);
+            }
+        } else {
+            outputChannel.appendLine(`[RAG] BM25 mode (semantic search disabled)`);
+        }
     } catch (error) {
         outputChannel.appendLine(`[RAG] Failed to initialize: ${error}`);
         ragIndex = null;
