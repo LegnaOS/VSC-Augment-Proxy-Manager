@@ -51,6 +51,13 @@ let outputChannel;
 let sidebarProvider;
 let extensionContext;
 let ragIndex: any = null;  // RAG 索引实例
+
+// ===== 会话级请求队列 =====
+// 防止同一会话的并发请求导致工具在 checkingSafety 阶段被取消
+// 原因：Augment 扩展会在用户请求后自动发送 "MESSAGE ANALYSIS MODE" 请求
+// 导致两个请求同时处理同一会话，触发并发冲突
+const conversationQueues = new Map<string, Promise<void>>();
+
 // 当前配置
 let currentConfig = {
     provider: 'anthropic',
@@ -1329,86 +1336,118 @@ ${pathGuidance}
     }
     return parts.join('\n\n');
 }
-// 核心：处理 chat-stream 请求
+// 核心：处理 chat-stream 请求（带会话级队列防止并发冲突）
 function handleChatStream(req, res) {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
         try {
             const augmentReq = JSON.parse(body);
+            const conversationId = augmentReq.conversation_id || '';
             const historyCount = augmentReq.chat_history?.length || 0;
             outputChannel.appendLine(`[CHAT-STREAM] message: "${(augmentReq.message || '').slice(0, 50)}..." history: ${historyCount}`);
-            // 详细日志：记录请求结构用于逆向分析
-            outputChannel.appendLine(`[DEBUG] Request keys: ${Object.keys(augmentReq).join(', ')}`);
-            if (augmentReq.nodes?.length) {
-                outputChannel.appendLine(`[DEBUG] nodes count: ${augmentReq.nodes.length}`);
-                augmentReq.nodes.forEach((n, i) => {
-                    outputChannel.appendLine(`[DEBUG] node[${i}]: type=${n.type}, keys=${Object.keys(n).join(',')}`);
-                    // 如果是 TOOL_RESULT (type=1)，打印详细信息
-                    if (n.type === 1 && n.tool_result_node) {
-                        outputChannel.appendLine(`[DEBUG] node[${i}] TOOL_RESULT: tool_use_id=${n.tool_result_node.tool_use_id}, content_len=${(n.tool_result_node.content || '').length}`);
-                    }
-                    // 如果是 IDE_STATE (type=4)，打印详细信息 - 这里包含工作区路径
-                    if (n.type === 4 && n.ide_state_node) {
-                        outputChannel.appendLine(`[DEBUG] node[${i}] IDE_STATE: ${JSON.stringify(n.ide_state_node).substring(0, 500)}`);
-                    }
-                });
+
+            // ===== 会话级请求队列 =====
+            // 防止同一会话的并发请求导致工具在 checkingSafety 阶段被取消
+            const pendingRequest = conversationQueues.get(conversationId);
+            if (pendingRequest) {
+                outputChannel.appendLine(`[QUEUE] Waiting for pending request on conversation ${conversationId.substring(0, 8)}...`);
+                try {
+                    await pendingRequest;
+                } catch {
+                    // 忽略前一个请求的错误，继续处理当前请求
+                }
+                outputChannel.appendLine(`[QUEUE] Previous request completed, proceeding...`);
             }
-            // 打印提取的工作区信息
-            const workspaceInfo = extractWorkspaceInfo(augmentReq);
-            outputChannel.appendLine(`[WORKSPACE] extracted: workspace=${workspaceInfo.workspacePath || 'N/A'}, repositoryRoot=${workspaceInfo.repositoryRoot || 'N/A'}, cwd=${workspaceInfo.cwd || 'N/A'}, currentFile=${workspaceInfo.currentFile || 'N/A'}`);
-            // 打印 chat_history 中的 response_nodes 详情
-            if (augmentReq.chat_history?.length) {
-                augmentReq.chat_history.forEach((ex, i) => {
-                    const respNodes = ex.response_nodes || [];
-                    const reqNodes = ex.request_nodes || [];
-                    outputChannel.appendLine(`[DEBUG] chat_history[${i}]: response_nodes=${respNodes.length}, request_nodes=${reqNodes.length}`);
-                    respNodes.forEach((n, j) => {
-                        if (n.type === 5) {
-                            outputChannel.appendLine(`[DEBUG] chat_history[${i}].response_nodes[${j}]: TOOL_USE, tool_use=${JSON.stringify(n.tool_use || n.tool_use_node || {}).slice(0, 200)}`);
+
+            // 创建当前请求的 Promise，加入队列
+            let resolveCurrentRequest: () => void;
+            const currentRequestPromise = new Promise<void>((resolve) => {
+                resolveCurrentRequest = resolve;
+            });
+            conversationQueues.set(conversationId, currentRequestPromise);
+
+            try {
+                // 详细日志：记录请求结构用于逆向分析
+                outputChannel.appendLine(`[DEBUG] Request keys: ${Object.keys(augmentReq).join(', ')}`);
+                if (augmentReq.nodes?.length) {
+                    outputChannel.appendLine(`[DEBUG] nodes count: ${augmentReq.nodes.length}`);
+                    augmentReq.nodes.forEach((n, i) => {
+                        outputChannel.appendLine(`[DEBUG] node[${i}]: type=${n.type}, keys=${Object.keys(n).join(',')}`);
+                        // 如果是 TOOL_RESULT (type=1)，打印详细信息
+                        if (n.type === 1 && n.tool_result_node) {
+                            outputChannel.appendLine(`[DEBUG] node[${i}] TOOL_RESULT: tool_use_id=${n.tool_result_node.tool_use_id}, content_len=${(n.tool_result_node.content || '').length}`);
+                        }
+                        // 如果是 IDE_STATE (type=4)，打印详细信息 - 这里包含工作区路径
+                        if (n.type === 4 && n.ide_state_node) {
+                            outputChannel.appendLine(`[DEBUG] node[${i}] IDE_STATE: ${JSON.stringify(n.ide_state_node).substring(0, 500)}`);
                         }
                     });
-                    reqNodes.forEach((n, j) => {
-                        if (n.type === 1) {
-                            outputChannel.appendLine(`[DEBUG] chat_history[${i}].request_nodes[${j}]: TOOL_RESULT, tool_result=${JSON.stringify(n.tool_result_node || {}).slice(0, 200)}`);
-                        }
+                }
+                // 打印提取的工作区信息
+                const workspaceInfo = extractWorkspaceInfo(augmentReq);
+                outputChannel.appendLine(`[WORKSPACE] extracted: workspace=${workspaceInfo.workspacePath || 'N/A'}, repositoryRoot=${workspaceInfo.repositoryRoot || 'N/A'}, cwd=${workspaceInfo.cwd || 'N/A'}, currentFile=${workspaceInfo.currentFile || 'N/A'}`);
+                // 打印 chat_history 中的 response_nodes 详情
+                if (augmentReq.chat_history?.length) {
+                    augmentReq.chat_history.forEach((ex, i) => {
+                        const respNodes = ex.response_nodes || [];
+                        const reqNodes = ex.request_nodes || [];
+                        outputChannel.appendLine(`[DEBUG] chat_history[${i}]: response_nodes=${respNodes.length}, request_nodes=${reqNodes.length}`);
+                        respNodes.forEach((n, j) => {
+                            if (n.type === 5) {
+                                outputChannel.appendLine(`[DEBUG] chat_history[${i}].response_nodes[${j}]: TOOL_USE, tool_use=${JSON.stringify(n.tool_use || n.tool_use_node || {}).slice(0, 200)}`);
+                            }
+                        });
+                        reqNodes.forEach((n, j) => {
+                            if (n.type === 1) {
+                                outputChannel.appendLine(`[DEBUG] chat_history[${i}].request_nodes[${j}]: TOOL_RESULT, tool_result=${JSON.stringify(n.tool_result_node || {}).slice(0, 200)}`);
+                            }
+                        });
                     });
-                });
-            }
-            if (augmentReq.blobs) {
-                const blobKeys = Array.isArray(augmentReq.blobs)
-                    ? `array[${augmentReq.blobs.length}]`
-                    : Object.keys(augmentReq.blobs).slice(0, 5).join(',');
-                outputChannel.appendLine(`[DEBUG] blobs: ${blobKeys}`);
-            }
-            if (augmentReq.user_guided_blobs) {
-                const ugbKeys = Array.isArray(augmentReq.user_guided_blobs)
-                    ? `array[${augmentReq.user_guided_blobs.length}]`
-                    : Object.keys(augmentReq.user_guided_blobs).slice(0, 5).join(',');
-                outputChannel.appendLine(`[DEBUG] user_guided_blobs: ${ugbKeys}`);
-            }
-            if (augmentReq.path)
-                outputChannel.appendLine(`[DEBUG] path: ${augmentReq.path}`);
-            if (augmentReq.prefix)
-                outputChannel.appendLine(`[DEBUG] prefix length: ${augmentReq.prefix.length}`);
-            if (augmentReq.suffix)
-                outputChannel.appendLine(`[DEBUG] suffix length: ${augmentReq.suffix.length}`);
-            // 调试 tool_definitions
-            if (augmentReq.tool_definitions) {
-                outputChannel.appendLine(`[DEBUG] tool_definitions: ${JSON.stringify(augmentReq.tool_definitions).substring(0, 500)}`);
-            } else {
-                outputChannel.appendLine(`[DEBUG] tool_definitions: undefined or null`);
-            }
-            if (!currentConfig.apiKey) {
-                sendAugmentError(res, `No API key for ${currentConfig.provider}`);
-                return;
-            }
-            // 转换为目标格式并转发
-            if (isAnthropicFormat(currentConfig.provider)) {
-                await forwardToAnthropicStream(augmentReq, res);
-            }
-            else {
-                await forwardToOpenAIStream(augmentReq, res);
+                }
+                if (augmentReq.blobs) {
+                    const blobKeys = Array.isArray(augmentReq.blobs)
+                        ? `array[${augmentReq.blobs.length}]`
+                        : Object.keys(augmentReq.blobs).slice(0, 5).join(',');
+                    outputChannel.appendLine(`[DEBUG] blobs: ${blobKeys}`);
+                }
+                if (augmentReq.user_guided_blobs) {
+                    const ugbKeys = Array.isArray(augmentReq.user_guided_blobs)
+                        ? `array[${augmentReq.user_guided_blobs.length}]`
+                        : Object.keys(augmentReq.user_guided_blobs).slice(0, 5).join(',');
+                    outputChannel.appendLine(`[DEBUG] user_guided_blobs: ${ugbKeys}`);
+                }
+                if (augmentReq.path)
+                    outputChannel.appendLine(`[DEBUG] path: ${augmentReq.path}`);
+                if (augmentReq.prefix)
+                    outputChannel.appendLine(`[DEBUG] prefix length: ${augmentReq.prefix.length}`);
+                if (augmentReq.suffix)
+                    outputChannel.appendLine(`[DEBUG] suffix length: ${augmentReq.suffix.length}`);
+                // 调试 tool_definitions
+                if (augmentReq.tool_definitions) {
+                    outputChannel.appendLine(`[DEBUG] tool_definitions: ${JSON.stringify(augmentReq.tool_definitions).substring(0, 500)}`);
+                } else {
+                    outputChannel.appendLine(`[DEBUG] tool_definitions: undefined or null`);
+                }
+                if (!currentConfig.apiKey) {
+                    sendAugmentError(res, `No API key for ${currentConfig.provider}`);
+                    return;
+                }
+                // 转换为目标格式并转发
+                if (isAnthropicFormat(currentConfig.provider)) {
+                    await forwardToAnthropicStream(augmentReq, res);
+                }
+                else {
+                    await forwardToOpenAIStream(augmentReq, res);
+                }
+            } finally {
+                // 请求完成，从队列中移除并通知等待者
+                resolveCurrentRequest!();
+                // 仅当队列中仍是当前请求时才移除（避免竞态条件）
+                if (conversationQueues.get(conversationId) === currentRequestPromise) {
+                    conversationQueues.delete(conversationId);
+                }
+                outputChannel.appendLine(`[QUEUE] Request completed for conversation ${conversationId.substring(0, 8)}`);
             }
         }
         catch (error) {
