@@ -2230,6 +2230,7 @@ async function executeOpenAIRequest(
 }
 
 // ========== 执行本地 RAG 搜索并格式化结果 ==========
+// 使用 <details> 标签实现可折叠的结构化输出
 function executeRAGSearch(query: string): string {
     if (!ragIndex) {
         return '⚠️ RAG 索引未初始化';
@@ -2245,28 +2246,43 @@ function executeRAGSearch(query: string): string {
         return `未找到与 "${query}" 相关的代码。请尝试其他关键词。`;
     }
 
-    // 格式化搜索结果 - 简洁明了
-    let output = `搜索 "${query}" 找到 ${results.length} 个相关文件 (${searchTime}ms):\n\n`;
+    // 格式化搜索结果 - 使用 details 标签实现折叠
+    let output = `## 🔍 代码库搜索\n\n`;
+    output += `> 查询: \`${query}\` | 找到 ${results.length} 个结果 | 耗时 ${searchTime}ms\n\n`;
 
-    for (const r of results) {
+    for (let i = 0; i < results.length; i++) {
+        const r = results[i];
         const score = (r.score * 100).toFixed(1);
-        output += `📄 **${r.path}** (相关度: ${score}%)\n`;
+        const fileName = r.path.split('/').pop() || r.path;
+
+        // 使用 details 标签创建可折叠区域
+        output += `<details${i === 0 ? ' open' : ''}>\n`;
+        output += `<summary><strong>📄 ${fileName}</strong> <code>${score}%</code> - ${r.path}</summary>\n\n`;
 
         // 显示匹配的关键词
         if (r.matchedTerms && r.matchedTerms.length > 0) {
-            output += `   匹配: ${r.matchedTerms.slice(0, 5).join(', ')}\n`;
+            output += `**匹配词:** ${r.matchedTerms.slice(0, 5).map(t => `\`${t}\``).join(' ')}\n\n`;
         }
 
-        // 显示代码片段（限制行数）
+        // 显示代码片段
         const lines = r.content.split('\n');
-        const previewLines = lines.slice(0, 15);
+        const previewLines = lines.slice(0, 20);
         const preview = previewLines.join('\n');
 
-        output += '```\n' + preview;
-        if (lines.length > 15) {
-            output += `\n... (还有 ${lines.length - 15} 行)\n`;
+        // 根据文件扩展名确定语言
+        const ext = r.path.split('.').pop() || '';
+        const langMap: Record<string, string> = {
+            'ts': 'typescript', 'js': 'javascript', 'py': 'python',
+            'md': 'markdown', 'json': 'json', 'html': 'html', 'css': 'css',
+            'rs': 'rust', 'go': 'go', 'java': 'java', 'c': 'c', 'cpp': 'cpp'
+        };
+        const lang = langMap[ext] || '';
+
+        output += `\`\`\`${lang}\n${preview}`;
+        if (lines.length > 20) {
+            output += `\n// ... 还有 ${lines.length - 20} 行`;
         }
-        output += '\n```\n\n';
+        output += `\n\`\`\`\n\n</details>\n\n`;
     }
 
     return output;
