@@ -545,45 +545,29 @@ async function initializeRAGIndex(): Promise<void> {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         outputChannel.appendLine(`[RAG] Index ready: ${stats.documentCount} documents, checkpoint ${stats.checkpointId}, took ${elapsed}s`);
 
-        // 🔥 v1.6.0: 配置语义搜索引擎
+        // 🔥 v1.7.0: 使用 transformers.js 本地语义搜索引擎
         const config = vscode.workspace.getConfiguration('augmentProxy');
-        const embeddingEnabled = config.get('embedding.enabled', false) as boolean;
+        const embeddingEnabled = config.get('embedding.enabled', true) as boolean;
 
         if (embeddingEnabled) {
-            const provider = (config.get('embedding.provider', 'glm') || 'glm') as 'glm' | 'openai' | 'custom';
-            let apiKey = (config.get('embedding.apiKey', '') || '') as string;
-            const baseUrl = (config.get('embedding.baseUrl', '') || '') as string;
-            const model = (config.get('embedding.model', '') || '') as string;
-
-            // 如果没有单独配置 embedding apiKey，尝试使用当前 provider 的 apiKey
-            if (!apiKey) {
-                const currentProvider = (config.get('provider', 'anthropic') || 'anthropic') as string;
-                // 从环境变量或密钥存储中获取 (这里简化处理，实际应该从 secretStorage 获取)
-                if (provider === 'glm' || currentProvider === 'glm') {
-                    apiKey = process.env.GLM_API_KEY || '';
-                } else if (provider === 'openai' || currentProvider === 'openai') {
-                    apiKey = process.env.OPENAI_API_KEY || '';
-                }
-            }
-
-            if (apiKey) {
+            try {
                 semanticEngine = new SemanticEmbeddings(
                     path.join(workspaceRoot, '.augment-rag'),
-                    (msg: string) => outputChannel.appendLine(msg)
+                    (msg: string) => outputChannel.appendLine(msg),
+                    (status: any) => {
+                        // 将嵌入状态更新到 sidebar
+                        if (sidebarProvider) {
+                            sidebarProvider.updateEmbeddingStatus(status);
+                        }
+                    }
                 );
-
-                semanticEngine.configure({
-                    provider,
-                    apiKey,
-                    baseUrl: baseUrl || undefined,
-                    model: model || undefined
-                });
 
                 await semanticEngine.initialize();
                 ragIndex.setSemanticEngine(semanticEngine);
-                outputChannel.appendLine(`[RAG] 🧠 Semantic search enabled with ${provider}`);
-            } else {
-                outputChannel.appendLine(`[RAG] ⚠️ Embedding enabled but no API key configured`);
+                outputChannel.appendLine(`[RAG] 🧠 Semantic search enabled (transformers.js)`);
+            } catch (embErr: any) {
+                outputChannel.appendLine(`[RAG] ⚠️ Semantic engine failed: ${embErr.message}`);
+                outputChannel.appendLine(`[RAG] Falling back to BM25 mode`);
             }
         } else {
             outputChannel.appendLine(`[RAG] BM25 mode (semantic search disabled)`);
@@ -3204,6 +3188,7 @@ class AugmentProxySidebarProvider {
     _view;
     _proxyRunning = false;
     _injected = false;
+    _embeddingStatus = null;
     constructor(_extensionUri) {
         this._extensionUri = _extensionUri;
     }
@@ -3212,6 +3197,12 @@ class AugmentProxySidebarProvider {
         this._injected = injected;
         if (this._view) {
             this._view.webview.postMessage({ type: 'status', proxyRunning, injected });
+        }
+    }
+    updateEmbeddingStatus(status) {
+        this._embeddingStatus = status;
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'embeddingStatus', ...status });
         }
     }
     resolveWebviewView(webviewView) {
@@ -3293,7 +3284,8 @@ class AugmentProxySidebarProvider {
             type: 'fullStatus',
             proxyRunning: !!proxyServer,
             injected: checkInjectionStatus(),
-            config: configData
+            config: configData,
+            embeddingStatus: this._embeddingStatus || { mode: 'local', modelLoading: false, modelReady: false, downloadProgress: 0, cacheCount: 0 }
         });
     }
     _getHtml() {
@@ -3395,6 +3387,18 @@ button.small { padding: 4px 8px; font-size: 11px; }
     </div>
 
     <div class="section">
+        <div class="title">🧠 语义搜索</div>
+        <div class="status"><span class="dot" id="embeddingDot"></span><span id="embeddingStatus">模型: 未加载</span></div>
+        <div id="downloadProgress" style="display:none; margin: 8px 0;">
+            <div style="background: var(--vscode-input-background); border-radius: 4px; height: 6px; overflow: hidden;">
+                <div id="progressBar" style="height: 100%; background: #4caf50; width: 0%; transition: width 0.3s;"></div>
+            </div>
+            <div id="progressText" style="font-size: 11px; opacity: 0.7; margin-top: 2px;">下载中: 0%</div>
+        </div>
+        <div class="status" style="font-size: 11px; opacity: 0.8;"><span>缓存文档:</span><span id="cacheCount" style="margin-left: 4px;">0</span></div>
+    </div>
+
+    <div class="section">
         <div class="title">插件注入</div>
         <div class="btn-row">
             <button id="injectBtn">注入插件</button>
@@ -3469,6 +3473,42 @@ document.getElementById('saveConfigBtn').onclick = () => {
     });
 };
 
+// 更新嵌入状态UI
+function updateEmbeddingUI(status) {
+    const dot = document.getElementById('embeddingDot');
+    const statusText = document.getElementById('embeddingStatus');
+    const progressDiv = document.getElementById('downloadProgress');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const cacheCount = document.getElementById('cacheCount');
+
+    if (status.modelLoading) {
+        dot.className = 'dot';
+        dot.style.background = '#ff9800';
+        dot.style.animation = 'pulse 1s infinite';
+        statusText.textContent = '模型: 加载中...';
+        progressDiv.style.display = 'block';
+        progressBar.style.width = status.downloadProgress + '%';
+        progressText.textContent = '下载中: ' + status.downloadProgress + '%';
+    } else if (status.modelReady) {
+        dot.className = 'dot on';
+        dot.style.animation = '';
+        statusText.textContent = '模型: 已就绪 ✓';
+        progressDiv.style.display = 'none';
+    } else if (status.error) {
+        dot.className = 'dot off';
+        dot.style.animation = '';
+        statusText.textContent = '模型: 加载失败';
+        progressDiv.style.display = 'none';
+    } else {
+        dot.className = 'dot off';
+        dot.style.animation = '';
+        statusText.textContent = '模型: 未加载';
+        progressDiv.style.display = 'none';
+    }
+    cacheCount.textContent = status.cacheCount || 0;
+}
+
 // 接收消息
 window.addEventListener('message', e => {
     const msg = e.data;
@@ -3477,6 +3517,8 @@ window.addEventListener('message', e => {
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
         document.getElementById('injectDot').className = 'dot ' + (msg.injected ? 'on' : 'off');
         document.getElementById('injectStatus').textContent = '注入: ' + (msg.injected ? '已注入' : '未注入');
+    } else if (msg.type === 'embeddingStatus') {
+        updateEmbeddingUI(msg);
     } else if (msg.type === 'fullStatus') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
@@ -3492,6 +3534,7 @@ window.addEventListener('message', e => {
         $formatRow.style.display = msg.config.provider === 'custom' ? 'block' : 'none';
         if (msg.config.provider === 'custom') $format.value = pConfig.format || 'anthropic';
         updateKeyStatus(pConfig.hasApiKey);
+        if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);
     }
 });
 
