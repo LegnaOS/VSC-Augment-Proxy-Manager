@@ -697,6 +697,31 @@ export class RAGContextIndex {
         this.onProgress?.('[RAG] Semantic engine configured');
     }
 
+    // 🔥 v1.7.1: 预加载所有文档嵌入（语义搜索）
+    async preloadEmbeddings(onProgress?: (current: number, total: number) => void): Promise<void> {
+        if (!this.semanticEngine?.isAvailable()) {
+            this.onProgress?.('[RAG] Semantic engine not available, skipping preload');
+            return;
+        }
+
+        // 收集所有文档
+        const documents: Array<{ path: string; content: string; hash: string }> = [];
+        for (const [docPath, doc] of this.getAllDocuments()) {
+            const content = await this.blobStorage.get(doc.blobId);
+            if (content) {
+                documents.push({ path: docPath, content, hash: doc.blobId });
+            }
+        }
+
+        if (documents.length === 0) {
+            this.onProgress?.('[RAG] No documents to preload');
+            return;
+        }
+
+        this.onProgress?.(`[RAG] Preloading embeddings for ${documents.length} documents...`);
+        await this.semanticEngine.preloadEmbeddings(documents, onProgress);
+    }
+
     // 🔥 初始化 LevelDB 存储层
     async initStorage(): Promise<void> {
         if (this.storageReady) return;

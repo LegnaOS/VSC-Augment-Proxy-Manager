@@ -16,6 +16,9 @@ export interface EmbeddingStatus {
     modelReady: boolean;
     cacheCount: number;
     error?: string;
+    // 🔥 v1.7.1: 嵌入预加载进度
+    embeddingProgress?: string;  // 格式: "42/128" 或 null
+    isPreloading?: boolean;
 }
 
 export class SemanticEmbeddings {
@@ -29,6 +32,10 @@ export class SemanticEmbeddings {
     private lastError: string = '';
     private onProgress?: (status: string) => void;
     private onStatusChange?: (status: EmbeddingStatus) => void;
+    // 🔥 v1.7.1: 预加载状态
+    private isPreloading: boolean = false;
+    private preloadCurrent: number = 0;
+    private preloadTotal: number = 0;
 
     constructor(cacheDir: string, onProgress?: (status: string) => void, onStatusChange?: (status: EmbeddingStatus) => void) {
         this.cacheDir = cacheDir;
@@ -48,6 +55,9 @@ export class SemanticEmbeddings {
             modelReady: this.modelReady,
             cacheCount: Object.keys(this.cache).length,
             error: this.lastError || undefined,
+            // 🔥 v1.7.1: 预加载进度
+            embeddingProgress: this.isPreloading ? `${this.preloadCurrent}/${this.preloadTotal}` : undefined,
+            isPreloading: this.isPreloading,
         };
     }
 
@@ -158,4 +168,68 @@ export class SemanticEmbeddings {
     isAvailable(): boolean { return this.initialized && this.modelReady; }
     clearCache(): void { this.cache = {}; try { fs.unlinkSync(this.getCachePath()); } catch { /* ignore */ } this.notifyStatus(); }
     getCacheStats() { return { documents: Object.keys(this.cache).length }; }
+
+    // 🔥 v1.7.1: 预加载所有文档嵌入
+    async preloadEmbeddings(
+        docs: Array<{ path: string; content: string; hash: string }>,
+        onProgress?: (current: number, total: number) => void
+    ): Promise<void> {
+        if (!this.isAvailable()) return;
+
+        const total = docs.length;
+        if (total === 0) return;
+
+        this.isPreloading = true;
+        this.preloadTotal = total;
+        this.preloadCurrent = 0;
+        this.notifyStatus();
+
+        this.onProgress?.(`[RAG] 🔄 Pre-generating embeddings for ${total} documents...`);
+
+        let needsSave = false;
+        for (let i = 0; i < docs.length; i++) {
+            const doc = docs[i];
+            this.preloadCurrent = i + 1;
+
+            // 检查缓存是否已有该文档的嵌入
+            const cached = this.cache[doc.path];
+            if (cached?.hash === doc.hash) {
+                // 已有缓存，跳过
+                if ((i + 1) % 50 === 0) {
+                    onProgress?.(i + 1, total);
+                    this.notifyStatus();
+                }
+                continue;
+            }
+
+            // 生成嵌入
+            const emb = await this.embed(doc.content);
+            if (emb) {
+                this.cache[doc.path] = { embedding: emb, hash: doc.hash };
+                needsSave = true;
+            }
+
+            // 定期更新进度和保存缓存
+            if ((i + 1) % 10 === 0) {
+                onProgress?.(i + 1, total);
+                this.notifyStatus();
+            }
+            if ((i + 1) % 50 === 0 && needsSave) {
+                await this.saveCache();
+                needsSave = false;
+            }
+        }
+
+        // 保存最终缓存
+        if (needsSave) {
+            await this.saveCache();
+        }
+
+        this.isPreloading = false;
+        this.preloadCurrent = 0;
+        this.preloadTotal = 0;
+        this.notifyStatus();
+
+        this.onProgress?.(`[RAG] ✅ Embeddings ready: ${Object.keys(this.cache).length} documents cached`);
+    }
 }

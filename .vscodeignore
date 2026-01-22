@@ -1,0 +1,40 @@
+# 源代码（只需要编译后的 out 目录）
+src/**
+**/*.ts
+tsconfig.json
+
+# 开发文件
+.git/**
+.github/**
+.claude/**
+.vscode/**
+.gitignore
+
+# 旧版本 vsix 包
+*.vsix
+
+# 日志文件
+*日志
+*日志/**
+*.log
+
+# Node.js 开发依赖（运行时不需要的）
+node_modules/@types/**
+
+# 文档（可选保留 readme）
+README_zh.md
+CHANGELOG.md
+LICENSE.md
+
+# 开发脚本
+extract-source.js
+
+# 打包配置
+.vscodeignore
+package-lock.json
+
+# 其他
+**/*.map
+.DS_Store
+Thumbs.db
+

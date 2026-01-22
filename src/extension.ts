@@ -565,6 +565,14 @@ async function initializeRAGIndex(): Promise<void> {
                 await semanticEngine.initialize();
                 ragIndex.setSemanticEngine(semanticEngine);
                 outputChannel.appendLine(`[RAG] 🧠 Semantic search enabled (transformers.js)`);
+
+                // 🔥 v1.7.1: 预加载所有文档嵌入
+                outputChannel.appendLine(`[RAG] 🔄 Pre-generating embeddings...`);
+                await ragIndex.preloadEmbeddings((current, total) => {
+                    if (current % 50 === 0 || current === total) {
+                        outputChannel.appendLine(`[RAG] Embedding progress: ${current}/${total}`);
+                    }
+                });
             } catch (embErr: any) {
                 outputChannel.appendLine(`[RAG] ⚠️ Semantic engine failed: ${embErr.message}`);
                 outputChannel.appendLine(`[RAG] Falling back to BM25 mode`);
@@ -3395,6 +3403,9 @@ button.small { padding: 4px 8px; font-size: 11px; }
             </div>
             <div id="progressText" style="font-size: 11px; opacity: 0.7; margin-top: 2px;">下载中: 0%</div>
         </div>
+        <div id="embeddingProgressRow" style="display:none; font-size: 11px; opacity: 0.8; margin: 4px 0;">
+            <span>🔄 正在生成嵌入:</span><span id="embeddingProgressText" style="margin-left: 4px; color: #4caf50;">0/0</span>
+        </div>
         <div class="status" style="font-size: 11px; opacity: 0.8;"><span>缓存文档:</span><span id="cacheCount" style="margin-left: 4px;">0</span></div>
     </div>
 
@@ -3481,6 +3492,8 @@ function updateEmbeddingUI(status) {
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
     const cacheCount = document.getElementById('cacheCount');
+    const embeddingProgressRow = document.getElementById('embeddingProgressRow');
+    const embeddingProgressText = document.getElementById('embeddingProgressText');
 
     if (status.modelLoading) {
         dot.className = 'dot';
@@ -3490,21 +3503,33 @@ function updateEmbeddingUI(status) {
         progressDiv.style.display = 'block';
         progressBar.style.width = status.downloadProgress + '%';
         progressText.textContent = '下载中: ' + status.downloadProgress + '%';
+        embeddingProgressRow.style.display = 'none';
     } else if (status.modelReady) {
         dot.className = 'dot on';
         dot.style.animation = '';
-        statusText.textContent = '模型: 已就绪 ✓';
         progressDiv.style.display = 'none';
+
+        // 🔥 v1.7.1: 显示嵌入预加载进度
+        if (status.isPreloading && status.embeddingProgress) {
+            statusText.textContent = '模型: 就绪, 生成中...';
+            embeddingProgressRow.style.display = 'block';
+            embeddingProgressText.textContent = status.embeddingProgress;
+        } else {
+            statusText.textContent = '模型: 已就绪 ✓';
+            embeddingProgressRow.style.display = 'none';
+        }
     } else if (status.error) {
         dot.className = 'dot off';
         dot.style.animation = '';
         statusText.textContent = '模型: 加载失败';
         progressDiv.style.display = 'none';
+        embeddingProgressRow.style.display = 'none';
     } else {
         dot.className = 'dot off';
         dot.style.animation = '';
         statusText.textContent = '模型: 未加载';
         progressDiv.style.display = 'none';
+        embeddingProgressRow.style.display = 'none';
     }
     cacheCount.textContent = status.cacheCount || 0;
 }
