@@ -2272,20 +2272,27 @@ function executeRAGSearch(query: string): string {
     return output;
 }
 
+// ========== 判断是否为代码搜索工具 ==========
+// 统一处理多种工具名称变体：codebase_search, codebase-search, codebase-retrieval
+function isCodebaseSearchTool(name: string): boolean {
+    return name === 'codebase_search' || name === 'codebase-search' || name === 'codebase-retrieval';
+}
+
 // ========== 检查是否只有 codebase_search 工具调用 ==========
 function hasOnlyCodebaseSearchCalls(toolCalls: Array<{ name: string }>): boolean {
     if (toolCalls.length === 0) return false;
-    return toolCalls.every(tc => tc.name === 'codebase_search');
+    return toolCalls.every(tc => isCodebaseSearchTool(tc.name));
 }
 
 // ========== 过滤出 codebase_search 工具调用 ==========
 function filterCodebaseSearchCalls(toolCalls: Array<{ id: string; name: string; arguments: string }>): Array<{ id: string; query: string }> {
     return toolCalls
-        .filter(tc => tc.name === 'codebase_search')
+        .filter(tc => isCodebaseSearchTool(tc.name))
         .map(tc => {
             try {
                 const args = JSON.parse(tc.arguments || '{}');
-                return { id: tc.id, query: args.query || '' };
+                // 兼容不同的参数名：query, information_request
+                return { id: tc.id, query: args.query || args.information_request || '' };
             } catch {
                 return { id: tc.id, query: '' };
             }
@@ -2354,8 +2361,9 @@ async function forwardToOpenAIStream(augmentReq: any, res: any) {
             }
 
             // 分离 codebase_search 调用和其他工具调用
+            // 使用 isCodebaseSearchTool() 统一判断多种变体名称
             const codebaseSearchCalls = filterCodebaseSearchCalls(result.toolCalls);
-            const otherToolCalls = result.toolCalls.filter(tc => tc.name !== 'codebase_search');
+            const otherToolCalls = result.toolCalls.filter(tc => !isCodebaseSearchTool(tc.name));
 
             outputChannel.appendLine(`[LOOP] Tool calls: codebase_search=${codebaseSearchCalls.length}, other=${otherToolCalls.length}`);
 
