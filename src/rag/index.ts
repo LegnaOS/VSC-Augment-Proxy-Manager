@@ -8,6 +8,7 @@
  * - CheckpointManager: 增量同步检查点
  *
  * 🔥 v0.10.0: 使用 LevelDB 替换 JSON 存储 (与 Augment 一致)
+ * 🔥 v1.6.0: 混合搜索 (BM25 + 语义向量)
  */
 
 import * as fs from 'fs';
@@ -15,6 +16,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { KvStore } from './storage';
 import { CodeStructure, generateLocalContext, LLMConfig } from './context-generator';
+import { SemanticEmbeddings } from './embeddings';
 
 // ============ 类型定义 ============
 
@@ -629,6 +631,11 @@ export class TFIDFEngine {
         return this.documents.get(filePath);
     }
 
+    // 🔥 v1.6.0: 获取所有文档（用于语义搜索）
+    getAllDocuments(): Map<string, IndexedDocument> {
+        return this.documents;
+    }
+
     size(): number {
         return this.documents.size;
     }
@@ -641,12 +648,15 @@ export class RAGContextIndex {
     private mtimeCache: MtimeCache;
     private blobStorage: BlobStorage;
     private tfidfEngine: TFIDFEngine;
+    private semanticEngine: SemanticEmbeddings | null = null;  // 🔥 v1.6.0: 语义搜索引擎
     private checkpointId: number = 0;
     private pendingChanges: number = 0;
     private initialized: boolean = false;
     private storageReady: boolean = false;
+    private onProgress?: (status: string) => void;
 
-    constructor(config: Partial<RAGConfig> & { workspaceRoot: string }) {
+    constructor(config: Partial<RAGConfig> & { workspaceRoot: string }, onProgress?: (status: string) => void) {
+        this.onProgress = onProgress;
         this.config = {
             workspaceRoot: config.workspaceRoot,
             cacheDir: config.cacheDir || path.join(config.workspaceRoot, '.augment-rag'),
@@ -677,6 +687,8 @@ export class RAGContextIndex {
         this.mtimeCache = new MtimeCache(this.config.cacheDir);
         this.blobStorage = new BlobStorage(this.config.cacheDir);
         this.tfidfEngine = new TFIDFEngine(this.config.cacheDir);
+        // 🔥 v1.6.0: 初始化语义引擎
+        this.semanticEngine = new SemanticEmbeddings(this.config.cacheDir, onProgress);
     }
 
     // 🔥 初始化 LevelDB 存储层
@@ -689,6 +701,13 @@ export class RAGContextIndex {
         ]);
         this.loadCheckpoint();
         this.storageReady = true;
+
+        // 🔥 v1.6.0: 异步初始化语义引擎（不阻塞主流程）
+        if (this.semanticEngine) {
+            this.semanticEngine.initialize().catch(() => {
+                this.onProgress?.('[RAG] Semantic engine failed to initialize, using BM25 fallback');
+            });
+        }
     }
 
     private loadCheckpoint(): void {
@@ -880,7 +899,65 @@ export class RAGContextIndex {
         ]);
     }
 
-    // 搜索 (使用同步版本获取内容)
+    // 🔥 v1.6.0: 语义搜索（异步）- 优先使用，BM25 作为降级
+    async searchAsync(query: string, topK: number = 10): Promise<SearchResult[]> {
+        // 尝试使用语义搜索
+        if (this.semanticEngine?.isAvailable()) {
+            return this.semanticSearch(query, topK);
+        }
+        // 降级到 BM25
+        return this.search(query, topK);
+    }
+
+    // 🔥 v1.6.0: 纯语义搜索
+    private async semanticSearch(query: string, topK: number): Promise<SearchResult[]> {
+        if (!this.semanticEngine) return [];
+
+        // 收集所有文档
+        const documents: Array<{ path: string; content: string; hash: string }> = [];
+        for (const [docPath, doc] of this.getAllDocuments()) {
+            const content = await this.blobStorage.get(doc.blobId);
+            if (content) {
+                documents.push({ path: docPath, content, hash: doc.blobId });
+            }
+        }
+
+        // 执行语义搜索
+        const semanticResults = await this.semanticEngine.semanticSearch(query, documents, topK * 2);
+        const results: SearchResult[] = [];
+
+        for (const result of semanticResults) {
+            const content = await this.blobStorage.getByPath(result.path);
+            if (!content) continue;
+
+            const doc = this.tfidfEngine.getDocument(result.path);
+            // 语义搜索用查询词作为高亮
+            const queryTerms = TFIDFEngine.tokenize(query);
+            const snippet = this.extractBestSnippet(content, queryTerms);
+
+            if (snippet) {
+                results.push({
+                    path: result.path,
+                    content: snippet.content,
+                    lineStart: snippet.lineStart,
+                    lineEnd: snippet.lineEnd,
+                    score: result.score,
+                    highlights: queryTerms,
+                    contextualContent: doc?.contextualContent,
+                    codeStructure: doc?.codeStructure
+                });
+            }
+        }
+
+        return results.slice(0, topK);
+    }
+
+    // 🔥 v1.6.0: 获取所有文档（用于语义搜索）
+    private getAllDocuments(): Map<string, IndexedDocument> {
+        return this.tfidfEngine.getAllDocuments();
+    }
+
+    // 搜索 (BM25，同步版本 - 作为降级方案)
     search(query: string, topK: number = 10): SearchResult[] {
         const tfidfResults = this.tfidfEngine.search(query, topK * 2);
         const results: SearchResult[] = [];

@@ -603,10 +603,10 @@ function handleCodebaseRetrieval(req, res) {
             let formattedResult = '';
             let snippetCount = 0;
 
-            // 优先使用 RAG 索引搜索
+            // 优先使用 RAG 索引搜索 (🔥 v1.6.0: 语义搜索)
             if (ragIndex) {
                 const startTime = Date.now();
-                const results = ragIndex.search(query, 10);
+                const results = await ragIndex.searchAsync(query, 10);
                 const searchTime = Date.now() - startTime;
 
                 outputChannel.appendLine(`[RAG] Search completed in ${searchTime}ms, found ${results.length} results`);
@@ -790,11 +790,11 @@ function handleNextEditStream(req, res) {
             const fileBaseName = path.basename(filePath).replace(/\.[^.]+$/, '');
             const query = `${fileBaseName} ${contextLines}`;
 
-            // 搜索相关代码
-            const results = ragIndex.search(query, 3);
+            // 搜索相关代码 (🔥 v1.6.0: 语义搜索)
+            const results = await ragIndex.searchAsync(query, 3);
 
             // 过滤掉当前文件
-            const relatedFiles = results.filter(r => !r.path.endsWith(path.basename(filePath)));
+            const relatedFiles = results.filter((r: any) => !r.path.endsWith(path.basename(filePath)));
 
             if (relatedFiles.length > 0) {
                 outputChannel.appendLine(`[NEXT-EDIT] Found ${relatedFiles.length} related files for ${filePath}`);
@@ -2231,13 +2231,15 @@ async function executeOpenAIRequest(
 
 // ========== 执行本地 RAG 搜索并格式化结果 ==========
 // 使用 <details> 标签实现可折叠的结构化输出
-function executeRAGSearch(query: string): string {
+// 🔥 v1.6.0: 改为异步函数，优先使用语义搜索
+async function executeRAGSearch(query: string): Promise<string> {
     if (!ragIndex) {
         return '⚠️ RAG 索引未初始化';
     }
 
     const startTime = Date.now();
-    const results = ragIndex.search(query, 8);
+    // 🔥 v1.6.0: 优先使用语义搜索，自动降级到 BM25
+    const results = await ragIndex.searchAsync(query, 8);
     const searchTime = Date.now() - startTime;
 
     outputChannel.appendLine(`[RAG] Search "${query.substring(0, 50)}..." completed in ${searchTime}ms, found ${results.length} results`);
@@ -2462,7 +2464,7 @@ async function forwardToOpenAIStream(augmentReq: any, res: any) {
 
                 // 执行每个 RAG 搜索并添加结果
                 for (const cs of codebaseSearchCalls) {
-                    const searchResult = executeRAGSearch(cs.query);
+                    const searchResult = await executeRAGSearch(cs.query);
 
                     // 添加 tool result 到消息
                     currentMessages.push({
