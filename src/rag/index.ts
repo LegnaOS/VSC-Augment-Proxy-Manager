@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { KvStore } from './storage';
+import { CodeStructure, generateLocalContext, LLMConfig } from './context-generator';
 
 // ============ 类型定义 ============
 
@@ -24,6 +25,9 @@ export interface IndexedDocument {
     size: number;           // 文件大小
     tokens: string[];       // 分词结果
     termFreq: Map<string, number>;  // 词频
+    // 🔥 v0.11.0: Contextual Embeddings 增强
+    contextualContent?: string;     // LLM 生成的上下文描述
+    codeStructure?: CodeStructure;  // 代码结构分析
 }
 
 export interface SearchResult {
@@ -33,6 +37,9 @@ export interface SearchResult {
     lineEnd: number;
     score: number;
     highlights: string[];   // 匹配的关键词
+    // 🔥 v0.11.0: Contextual Embeddings 增强
+    contextualContent?: string;     // 上下文描述
+    codeStructure?: CodeStructure;  // 代码结构
 }
 
 export interface RAGConfig {
@@ -733,9 +740,23 @@ export class RAGContextIndex {
         this.initialized = true;
     }
 
-    // 扫描文件
-    private scanFiles(dir: string, depth: number = 0): string[] {
+    // 扫描文件（支持 iCloud 和网络路径）
+    private scanFiles(dir: string, depth: number = 0, visitedPaths: Set<string> = new Set()): string[] {
         if (depth > 15) return [];  // 最大深度限制
+
+        // 🔥 解析真实路径（处理符号链接，特别是 iCloud）
+        let realDir: string;
+        try {
+            realDir = fs.realpathSync(dir);
+        } catch {
+            realDir = dir;
+        }
+
+        // 🔥 防止循环引用（符号链接可能导致）
+        if (visitedPaths.has(realDir)) {
+            return [];
+        }
+        visitedPaths.add(realDir);
 
         const results: string[] = [];
         try {
@@ -746,10 +767,27 @@ export class RAGContextIndex {
 
                 const fullPath = path.join(dir, item);
                 try {
-                    const stat = fs.statSync(fullPath);
-                    if (stat.isDirectory()) {
-                        results.push(...this.scanFiles(fullPath, depth + 1));
-                    } else if (stat.isFile()) {
+                    // 🔥 使用 lstatSync 检测符号链接，然后用 statSync 获取实际文件信息
+                    const lstat = fs.lstatSync(fullPath);
+
+                    if (lstat.isSymbolicLink()) {
+                        // 解析符号链接目标
+                        try {
+                            const realPath = fs.realpathSync(fullPath);
+                            const realStat = fs.statSync(realPath);
+
+                            if (realStat.isDirectory()) {
+                                results.push(...this.scanFiles(fullPath, depth + 1, visitedPaths));
+                            } else if (realStat.isFile()) {
+                                const ext = path.extname(item).toLowerCase();
+                                if (this.config.extensions.includes(ext) || ext === '') {
+                                    results.push(fullPath);  // 使用原始路径，保持一致性
+                                }
+                            }
+                        } catch { /* 符号链接目标不存在或无权限 */ }
+                    } else if (lstat.isDirectory()) {
+                        results.push(...this.scanFiles(fullPath, depth + 1, visitedPaths));
+                    } else if (lstat.isFile()) {
                         const ext = path.extname(item).toLowerCase();
                         if (this.config.extensions.includes(ext) || ext === '') {
                             results.push(fullPath);
@@ -764,7 +802,14 @@ export class RAGContextIndex {
     // 索引单个文件
     private async indexFile(relativePath: string, content: string, mtime: number, size: number): Promise<void> {
         const blobId = this.blobStorage.storeSync(relativePath, content);  // 使用同步版本
-        const tokens = TFIDFEngine.tokenize(content);
+
+        // 🔥 v0.11.0: 生成代码结构和上下文描述
+        const { context: contextualContent, codeStructure } = generateLocalContext(content, relativePath);
+
+        // 将上下文描述和原始内容合并用于 tokenize
+        // 这样搜索时可以匹配上下文关键词
+        const contentWithContext = `${contextualContent}\n\n${content}`;
+        const tokens = TFIDFEngine.tokenize(contentWithContext);
         const termFreq = TFIDFEngine.computeTermFreq(tokens);
 
         const doc: IndexedDocument = {
@@ -773,7 +818,9 @@ export class RAGContextIndex {
             mtime,
             size,
             tokens,
-            termFreq
+            termFreq,
+            contextualContent,
+            codeStructure
         };
 
         this.tfidfEngine.addDocument(doc);
@@ -820,6 +867,9 @@ export class RAGContextIndex {
             const content = this.blobStorage.getByPathSync(result.path);
             if (!content) continue;
 
+            // 🔥 v0.11.0: 获取文档的上下文描述和代码结构
+            const doc = this.tfidfEngine.getDocument(result.path);
+
             // 找到最相关的代码片段
             const snippet = this.extractBestSnippet(content, result.matchedTerms);
             if (snippet) {
@@ -829,7 +879,10 @@ export class RAGContextIndex {
                     lineStart: snippet.lineStart,
                     lineEnd: snippet.lineEnd,
                     score: result.score,
-                    highlights: result.matchedTerms
+                    highlights: result.matchedTerms,
+                    // 🔥 v0.11.0: 添加上下文信息
+                    contextualContent: doc?.contextualContent,
+                    codeStructure: doc?.codeStructure
                 });
             }
         }

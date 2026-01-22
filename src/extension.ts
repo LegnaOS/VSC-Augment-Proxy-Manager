@@ -385,13 +385,22 @@ interface CodeSnippet {
     score: number;
 }
 
-// 获取工作区根目录
+// 获取工作区根目录（支持 iCloud 和网络路径）
 function getWorkspaceRoots(): string[] {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
         return [];
     }
-    return folders.map(f => f.uri.fsPath);
+    return folders.map(f => {
+        let fsPath = f.uri.fsPath;
+        // 🔥 解析符号链接（iCloud 路径通常是符号链接）
+        try {
+            fsPath = fs.realpathSync(fsPath);
+        } catch {
+            // 如果无法解析，保持原始路径
+        }
+        return fsPath;
+    });
 }
 
 // 递归搜索文件
@@ -2649,8 +2658,9 @@ function checkInjectionStatus() {
 function generateInjectionCode(proxyUrl) {
     const timestamp = new Date().toISOString();
     return `
-// ===== AUGMENT CUSTOM MODEL INJECTION v8.0 =====
+// ===== AUGMENT CUSTOM MODEL INJECTION v9.0 =====
 // Injected at: ${timestamp}
+// v9.0: 代理不启动时保持原版 Augment 功能（不注入 mockPluginState）
 // v8.0: 恢复 v4.0 的显式端点匹配，修复 Agent 模式问题
 (function() {
     "use strict";
@@ -2725,26 +2735,27 @@ function generateInjectionCode(proxyUrl) {
     };
     globalThis.__AUGMENT_MOCK_STATE__ = mockPluginState;
 
-    // Hook Object.defineProperty 来拦截单例模式的 _instance 设置
-    const originalDefineProperty = Object.defineProperty;
-    Object.defineProperty = function(obj, prop, descriptor) {
-        if (prop === '_instance' && descriptor && descriptor.value === void 0) {
-            log('Intercepted _instance definition');
-        }
-        return originalDefineProperty.call(this, obj, prop, descriptor);
-    };
+    // 🔥 v9.0: 只有代理可用时才注入 mockPluginState，否则保持原版行为
+    // 这样代理不启动时，Augment 完全正常工作
 
-    // 延迟注入 PluginState mock
-    setTimeout(() => {
-        log('Attempting to patch PluginState singleton...');
+    // 延迟注入 PluginState mock - 但需要先检查代理是否可用
+    const tryInjectMockState = () => {
+        // 🔥 关键修复：只有代理可用时才注入 mock
+        if (!CONFIG.proxyAvailable) {
+            log('Proxy not available, skipping PluginState mock injection (keeping original Augment behavior)');
+            return;
+        }
+
+        log('Proxy is available, attempting to patch PluginState singleton...');
         try {
             for (const key in globalThis) {
                 try {
                     const obj = globalThis[key];
                     if (obj && typeof obj === 'object' && typeof obj.getStateForSidecar === 'function') {
                         log('Found PluginState singleton:', key);
-                        if (obj._instance === void 0) {
+                        if (obj._instance === void 0 || !obj._instance.__isProxyMock) {
                             obj._instance = mockPluginState;
+                            obj._instance.__isProxyMock = true;  // 标记为 mock
                             log('PluginState mock injected successfully!');
                         }
                     }
@@ -2753,7 +2764,27 @@ function generateInjectionCode(proxyUrl) {
         } catch (e) {
             log('Error patching PluginState:', e.message);
         }
-    }, 500);
+    };
+
+    // 初始延迟注入（等待 Augment 加载完成 + 代理健康检查）
+    setTimeout(tryInjectMockState, 1000);
+
+    // 🔥 当代理状态变化时重新检查（每次健康检查后）
+    const originalCheckProxyHealth = checkProxyHealth;
+    const enhancedCheckProxyHealth = async () => {
+        const wasAvailable = CONFIG.proxyAvailable;
+        const result = await originalCheckProxyHealth();
+        // 如果代理从不可用变为可用，尝试注入 mock
+        if (!wasAvailable && CONFIG.proxyAvailable) {
+            log('Proxy became available, injecting mock state...');
+            tryInjectMockState();
+        }
+        return result;
+    };
+    // 替换健康检查函数
+    CONFIG.checkInterval && clearInterval(CONFIG.checkInterval);
+    enhancedCheckProxyHealth();
+    CONFIG.checkInterval = setInterval(enhancedCheckProxyHealth, 5000);
 
     // ===== 核心：拦截 fetch 请求（恢复 v4.0 显式端点匹配）=====
     const originalFetch = globalThis.fetch;
