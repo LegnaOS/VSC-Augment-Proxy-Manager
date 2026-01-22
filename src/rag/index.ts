@@ -441,12 +441,34 @@ export class TFIDFEngine {
             }
         }
 
-        // 4. 提取中文词汇
+        // 4. 提取中文词汇 - 🔥 增强：添加单字和双字组合
         const chinese = text.match(/[\u4e00-\u9fa5]+/g) || [];
         for (const word of chinese) {
+            // 添加完整词组
             if (!seen.has(word)) {
                 seen.add(word);
                 tokens.push(word);
+            }
+
+            // 🔥 如果词组长度 >= 2，添加单个中文字
+            if (word.length >= 2) {
+                for (const char of word) {
+                    if (!seen.has(char)) {
+                        seen.add(char);
+                        tokens.push(char);
+                    }
+                }
+            }
+
+            // 🔥 如果词组长度 >= 4，添加双字组合（模拟常见中文词汇）
+            if (word.length >= 4) {
+                for (let i = 0; i < word.length - 1; i++) {
+                    const bigram = word.substring(i, i + 2);
+                    if (!seen.has(bigram)) {
+                        seen.add(bigram);
+                        tokens.push(bigram);
+                    }
+                }
             }
         }
 

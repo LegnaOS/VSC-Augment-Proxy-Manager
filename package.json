@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "publisher": "legna",
   "repository": {
     "type": "git",
