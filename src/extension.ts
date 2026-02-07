@@ -3907,8 +3907,6 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         // 直接遍历 response
         try {
             for await (const chunk of response) {
-                outputChannel.appendLine(`[GOOGLE] Chunk received: ${JSON.stringify(chunk).substring(0, 500)}`);
-                
                 // chunk 就是 GenerateContentResponse
                 const candidates = chunk.candidates;
                 if (!candidates || candidates.length === 0) continue;
@@ -3950,7 +3948,7 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
                         applyPathFixes(toolNode.tool_use, workspaceInfo);
                         
                         res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
-                        outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}, thoughtSignature=${!!toolNode.tool_use.thought_signature}`);
+                        outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}`);
                     }
                 }
             }
@@ -4002,7 +4000,6 @@ function augmentToGeminiMessages(req: any): any[] {
                     role: 'user',
                     parts: [{ text: exchange.request_message }]
                 });
-                outputChannel.appendLine(`[GOOGLE] Exchange ${i} user: "${exchange.request_message.slice(0, 50)}..."`);
             }
             
             // 2. 模型响应（当前 exchange 的 response_nodes）
@@ -4022,13 +4019,9 @@ function augmentToGeminiMessages(req: any): any[] {
                     };
                     
                     // Gemini 3.0 要求 thoughtSignature 在 part 级别
-                    // 从 tool_use 中提取（如果有）
                     const part: any = { functionCall };
                     if (tu.thought_signature) {
                         part.thoughtSignature = tu.thought_signature;
-                        outputChannel.appendLine(`[GOOGLE] Adding thoughtSignature to part: ${tu.thought_signature.substring(0, 50)}...`);
-                    } else {
-                        outputChannel.appendLine(`[GOOGLE] WARNING: No thought_signature found for tool ${tu.tool_name}`);
                     }
                     
                     modelParts.push(part);
@@ -4037,7 +4030,6 @@ function augmentToGeminiMessages(req: any): any[] {
             
             if (modelParts.length > 0) {
                 messages.push({ role: 'model', parts: modelParts });
-                outputChannel.appendLine(`[GOOGLE] Exchange ${i} model: ${modelParts.length} parts, has tool call: ${hasToolCall}`);
             }
             
             // 3. 工具结果（当前 exchange 的 request_nodes）
@@ -4066,7 +4058,6 @@ function augmentToGeminiMessages(req: any): any[] {
                 // 检查是否有下一个 exchange 的 request_message
                 if (nextExchange && nextExchange.request_message) {
                     userParts.push({ text: nextExchange.request_message });
-                    outputChannel.appendLine(`[GOOGLE] Exchange ${i} tool results (${toolResults.length}) merged with exchange ${i+1} user message`);
                     
                     messages.push({
                         role: 'user',
@@ -4101,14 +4092,12 @@ function augmentToGeminiMessages(req: any): any[] {
                     
                     if (nextModelParts.length > 0) {
                         messages.push({ role: 'model', parts: nextModelParts });
-                        outputChannel.appendLine(`[GOOGLE] Exchange ${i+1} model: ${nextModelParts.length} parts, has tool call: ${nextHasToolCall}`);
                     }
                     
                     // 跳过下一个 exchange（已经处理过了）
                     i++;
                 } else {
                     // 没有下一个 exchange，工具结果会在当前请求的 nodes 里处理
-                    outputChannel.appendLine(`[GOOGLE] Exchange ${i} has ${toolResults.length} tool results, will be merged with current request`);
                 }
             }
         }
@@ -4159,22 +4148,10 @@ function augmentToGeminiMessages(req: any): any[] {
     
     if (currentUserParts.length > 0) {
         messages.push({ role: 'user', parts: currentUserParts });
-        outputChannel.appendLine(`[GOOGLE] Current user: ${currentToolCount} tool results, has text: ${!!(req.message && req.message !== '...')}`);
     }
     
     // 打印最终的消息序列
     outputChannel.appendLine(`[GOOGLE] Final message sequence: ${messages.map(m => m.role).join(' → ')}`);
-    
-    // 打印每个消息的详细结构（用于调试）
-    messages.forEach((msg, i) => {
-        if (msg.role === 'model' && msg.parts) {
-            msg.parts.forEach((part: any, j: number) => {
-                if (part.functionCall) {
-                    outputChannel.appendLine(`[GOOGLE] Message ${i} part ${j}: functionCall=${part.functionCall.name}, has thoughtSignature=${!!part.thoughtSignature}`);
-                }
-            });
-        }
-    });
     
     return messages;
 }
