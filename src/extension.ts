@@ -3513,6 +3513,7 @@ button.small { padding: 4px 8px; font-size: 11px; }
                 <option value="deepseek">DeepSeek</option>
                 <option value="glm">GLM (智谱)</option>
                 <option value="openai">OpenAI</option>
+                <option value="google">Google Gemini</option>
                 <option value="custom">自定义</option>
             </select>
         </div>
@@ -3530,11 +3531,11 @@ button.small { padding: 4px 8px; font-size: 11px; }
         </div>
         <div class="row">
             <label>Model</label>
-            <div style="display: flex; gap: 4px;">
+            <div style="display: flex; gap: 4px; align-items: stretch;">
                 <select id="modelSelect" style="flex: 1;">
                     <option value="">-- 选择模型 --</option>
                 </select>
-                <button class="small" id="refreshModelsBtn" title="刷新模型列表">🔄</button>
+                <button class="small" id="refreshModelsBtn" title="刷新模型列表" style="width: 32px; padding: 6px 4px; flex-shrink: 0;">🔄</button>
             </div>
             <input type="text" id="model" placeholder="或手动输入模型名称" style="margin-top: 4px;">
             <div class="info" id="modelInfo"></div>
