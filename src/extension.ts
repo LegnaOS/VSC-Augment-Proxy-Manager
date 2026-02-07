@@ -4032,7 +4032,16 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
     
     try {
         // 初始化 Google GenAI 客户端
-        const ai = new GoogleGenAI({ apiKey: currentConfig.apiKey });
+        const apiKey = currentConfig.apiKey;
+        if (!apiKey || apiKey.trim() === '') {
+            throw new Error('Google API Key is not configured');
+        }
+        
+        outputChannel.appendLine(`[GOOGLE] API Key: ${apiKey.slice(0, 10)}...${apiKey.slice(-4)} (length: ${apiKey.length})`);
+        outputChannel.appendLine(`[GOOGLE] Model: ${currentConfig.model}`);
+        outputChannel.appendLine(`[GOOGLE] Base URL: ${currentConfig.baseUrl || 'default'}`);
+        
+        const ai = new GoogleGenAI({ apiKey: apiKey });
         
         // 构建配置对象
         const config: any = {};
@@ -4065,12 +4074,44 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         // 流式生成
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         
-        // 正确的 API 调用方式
-        const response = await ai.models.generateContentStream({
+        outputChannel.appendLine(`[GOOGLE] Calling API: generateContentStream`);
+        outputChannel.appendLine(`[GOOGLE] Messages count: ${geminiMessages.length}`);
+        outputChannel.appendLine(`[GOOGLE] Tools count: ${tools.length}`);
+        
+        // 正确的 API 调用方式 - config 参数应该展开
+        const requestParams: any = {
             model: currentConfig.model,
-            contents: geminiMessages,
-            config: config
-        });
+            contents: geminiMessages
+        };
+        
+        // 添加系统指令
+        if (system) {
+            requestParams.systemInstruction = system;
+        }
+        
+        // 添加工具定义
+        if (tools && tools.length > 0) {
+            requestParams.tools = [{ functionDeclarations: tools }];
+        }
+        
+        // 添加生成配置
+        requestParams.generationConfig = {
+            temperature: 0.7,
+            topP: 0.95,
+            topK: 40,
+            maxOutputTokens: 8192
+        };
+        
+        outputChannel.appendLine(`[GOOGLE] Request params: ${JSON.stringify({
+            model: requestParams.model,
+            contentsCount: requestParams.contents.length,
+            hasSystemInstruction: !!requestParams.systemInstruction,
+            toolsCount: requestParams.tools ? requestParams.tools[0].functionDeclarations.length : 0
+        })}`);
+        
+        const response = await ai.models.generateContentStream(requestParams);
+        
+        outputChannel.appendLine(`[GOOGLE] API call successful, processing stream...`);
         
         let hasToolCalls = false;
         let accumulatedText = '';
@@ -4148,6 +4189,34 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
     } catch (error: any) {
         outputChannel.appendLine(`[GOOGLE ERROR] ${error.message}`);
         outputChannel.appendLine(`[GOOGLE ERROR] Stack: ${error.stack}`);
+        
+        // 详细的错误诊断
+        if (error.message && error.message.includes('fetch failed')) {
+            outputChannel.appendLine(`[GOOGLE ERROR] Network error detected. Possible causes:`);
+            outputChannel.appendLine(`  1. Invalid API Key - check your Google API key`);
+            outputChannel.appendLine(`  2. Network connectivity - check internet connection`);
+            outputChannel.appendLine(`  3. Firewall/Proxy - check if blocking Google API`);
+            outputChannel.appendLine(`  4. API endpoint - verify model name is correct`);
+            
+            // 检查 API key 格式
+            const apiKey = currentConfig.apiKey || '';
+            if (apiKey.length === 0) {
+                outputChannel.appendLine(`  ❌ API Key is empty!`);
+            } else if (apiKey.length < 30) {
+                outputChannel.appendLine(`  ⚠️ API Key seems too short (${apiKey.length} chars)`);
+            } else {
+                outputChannel.appendLine(`  ✓ API Key format looks OK (${apiKey.length} chars)`);
+            }
+            
+            // 检查模型名称
+            const model = currentConfig.model || '';
+            if (!model.startsWith('gemini-')) {
+                outputChannel.appendLine(`  ⚠️ Model name doesn't start with 'gemini-': ${model}`);
+            } else {
+                outputChannel.appendLine(`  ✓ Model name looks OK: ${model}`);
+            }
+        }
+        
         if (!res.headersSent) {
             sendAugmentError(res, error.message);
         }
@@ -4163,27 +4232,29 @@ function augmentToGeminiMessages(req: any): any[] {
         for (let i = 0; i < req.chat_history.length; i++) {
             const exchange = req.chat_history[i];
             
+            // 跳过空的 exchange（没有 response_nodes 的）
+            const responseNodes = exchange.response_nodes || [];
+            if (responseNodes.length === 0) {
+                outputChannel.appendLine(`[GOOGLE] Skipping empty exchange ${i} (no response_nodes)`);
+                continue;
+            }
+            
             // 1. 用户消息（当前 exchange 的 request_message）
-            // 特殊处理：如果是第一个 exchange 且没有 request_message，添加占位符
-            if (i === 0 && !exchange.request_message) {
-                // Gemini 要求对话必须以 user 开头
-                // 如果第一个 exchange 没有 request_message，说明初始用户消息在第一次请求时发送
-                // 我们需要添加一个占位符，内容可以从 req.message 或其他地方获取
-                // 但由于我们不知道原始消息，使用一个通用占位符
+            if (exchange.request_message) {
+                messages.push({
+                    role: 'user',
+                    parts: [{ text: exchange.request_message }]
+                });
+            } else if (i === 0) {
+                // 只有第一个 exchange 可以没有 request_message
                 messages.push({
                     role: 'user',
                     parts: [{ text: 'Continue with the previous request.' }]
                 });
                 outputChannel.appendLine(`[GOOGLE] Exchange ${i} user: [placeholder for missing request_message]`);
-            } else if (exchange.request_message) {
-                messages.push({
-                    role: 'user',
-                    parts: [{ text: exchange.request_message }]
-                });
             }
             
             // 2. 模型响应（当前 exchange 的 response_nodes）
-            const responseNodes = exchange.response_nodes || [];
             const modelParts: any[] = [];
             let hasToolCall = false;
             
@@ -4213,8 +4284,6 @@ function augmentToGeminiMessages(req: any): any[] {
             }
             
             // 3. 工具结果（当前 exchange 的 request_nodes）
-            // 这些工具结果应该和下一个 exchange 的 request_message 合并
-            // 或者和当前请求的 message 合并（如果这是最后一个 exchange）
             const requestNodes = exchange.request_nodes || [];
             const toolResults: any[] = [];
             
@@ -4246,38 +4315,35 @@ function augmentToGeminiMessages(req: any): any[] {
                     
                     // 处理下一个 exchange 的 response_nodes
                     const nextResponseNodes = nextExchange.response_nodes || [];
-                    const nextModelParts: any[] = [];
-                    let nextHasToolCall = false;
-                    
-                    for (const node of nextResponseNodes) {
-                        if (node.type === 0 && node.text_node) {
-                            nextModelParts.push({ text: node.text_node.content });
-                        } else if (node.type === 5 && node.tool_use) {
-                            nextHasToolCall = true;
-                            const tu = node.tool_use;
-                            const functionCall: any = {
-                                name: tu.tool_name || tu.name,
-                                args: JSON.parse(tu.input_json || '{}')
-                            };
-                            
-                            // Gemini 3.0 要求 thoughtSignature 在 part 级别
-                            const part: any = { functionCall };
-                            if (tu.thought_signature) {
-                                part.thoughtSignature = tu.thought_signature;
+                    if (nextResponseNodes.length > 0) {
+                        const nextModelParts: any[] = [];
+                        
+                        for (const node of nextResponseNodes) {
+                            if (node.type === 0 && node.text_node) {
+                                nextModelParts.push({ text: node.text_node.content });
+                            } else if (node.type === 5 && node.tool_use) {
+                                const tu = node.tool_use;
+                                const functionCall: any = {
+                                    name: tu.tool_name || tu.name,
+                                    args: JSON.parse(tu.input_json || '{}')
+                                };
+                                
+                                const part: any = { functionCall };
+                                if (tu.thought_signature) {
+                                    part.thoughtSignature = tu.thought_signature;
+                                }
+                                
+                                nextModelParts.push(part);
                             }
-                            
-                            nextModelParts.push(part);
                         }
-                    }
-                    
-                    if (nextModelParts.length > 0) {
-                        messages.push({ role: 'model', parts: nextModelParts });
+                        
+                        if (nextModelParts.length > 0) {
+                            messages.push({ role: 'model', parts: nextModelParts });
+                        }
                     }
                     
                     // 跳过下一个 exchange（已经处理过了）
                     i++;
-                } else {
-                    // 没有下一个 exchange，工具结果会在当前请求的 nodes 里处理
                 }
             }
         }
@@ -4287,10 +4353,8 @@ function augmentToGeminiMessages(req: any): any[] {
     const currentUserParts: any[] = [];
     
     // 先添加工具结果
-    let currentToolCount = 0;
     for (const node of req.nodes || []) {
         if (node.type === 1 && node.tool_result_node) {
-            currentToolCount++;
             const tr = node.tool_result_node;
             currentUserParts.push({
                 functionResponse: {
@@ -4330,14 +4394,32 @@ function augmentToGeminiMessages(req: any): any[] {
         messages.push({ role: 'user', parts: currentUserParts });
     }
     
-    // Gemini API 要求至少有一条消息
-    // 如果 messages 为空（没有历史记录且当前消息是 "..."），添加一个占位符
+    // Gemini API 要求至少有一条消息，且必须以 user 开头
     if (messages.length === 0) {
         outputChannel.appendLine(`[GOOGLE] WARNING: No messages generated, adding placeholder`);
         messages.push({
             role: 'user',
             parts: [{ text: 'Please continue with the task.' }]
         });
+    } else if (messages[0].role !== 'user') {
+        outputChannel.appendLine(`[GOOGLE] WARNING: First message is not user, prepending placeholder`);
+        messages.unshift({
+            role: 'user',
+            parts: [{ text: 'Continue with the previous request.' }]
+        });
+    }
+    
+    // 验证消息序列：user 和 model 必须交替出现
+    for (let i = 0; i < messages.length - 1; i++) {
+        if (messages[i].role === messages[i + 1].role) {
+            outputChannel.appendLine(`[GOOGLE] ERROR: Consecutive ${messages[i].role} messages at index ${i} and ${i + 1}`);
+            // 如果有连续的 user 消息，合并它们
+            if (messages[i].role === 'user') {
+                messages[i].parts = [...messages[i].parts, ...messages[i + 1].parts];
+                messages.splice(i + 1, 1);
+                i--; // 重新检查当前位置
+            }
+        }
     }
     
     // 打印最终的消息序列
@@ -4400,4 +4482,3 @@ function applyPathFixes(toolUse: any, workspaceInfo: any) {
         // 忽略解析错误
     }
 }
-//# sourceMappingURL=extension.js.map
