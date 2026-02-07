@@ -1437,10 +1437,16 @@ function handleChatStream(req, res) {
                     augmentReq.chat_history.forEach((ex, i) => {
                         const respNodes = ex.response_nodes || [];
                         const reqNodes = ex.request_nodes || [];
-                        outputChannel.appendLine(`[DEBUG] chat_history[${i}]: response_nodes=${respNodes.length}, request_nodes=${reqNodes.length}`);
+                        const hasReqMsg = !!ex.request_message;
+                        outputChannel.appendLine(`[DEBUG] chat_history[${i}]: response_nodes=${respNodes.length}, request_nodes=${reqNodes.length}, has_request_message=${hasReqMsg}`);
+                        if (hasReqMsg) {
+                            outputChannel.appendLine(`[DEBUG] chat_history[${i}].request_message: "${(ex.request_message || '').slice(0, 100)}..."`);
+                        }
                         respNodes.forEach((n, j) => {
                             if (n.type === 5) {
-                                outputChannel.appendLine(`[DEBUG] chat_history[${i}].response_nodes[${j}]: TOOL_USE, tool_use=${JSON.stringify(n.tool_use || n.tool_use_node || {}).slice(0, 200)}`);
+                                const tu = n.tool_use || n.tool_use_node || {};
+                                outputChannel.appendLine(`[DEBUG] chat_history[${i}].response_nodes[${j}]: TOOL_USE, tool_use=${JSON.stringify(tu).slice(0, 300)}`);
+                                outputChannel.appendLine(`[DEBUG] chat_history[${i}].response_nodes[${j}]: has thought_signature=${!!tu.thought_signature}, has thoughtSignature=${!!tu.thoughtSignature}`);
                             }
                         });
                         reqNodes.forEach((n, j) => {
@@ -3871,43 +3877,56 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         // 初始化 Google GenAI 客户端
         const ai = new GoogleGenAI({ apiKey: currentConfig.apiKey });
         
-        // 构建请求参数
-        const requestParams: any = {
-            model: currentConfig.model,
-            contents: geminiMessages,
-        };
+        // 构建配置对象
+        const config: any = {};
         
         // 添加系统指令
         if (system) {
-            requestParams.systemInstruction = { parts: [{ text: system }] };
+            config.systemInstruction = system;
         }
         
         // 添加工具定义
         if (tools && tools.length > 0) {
-            requestParams.tools = [{ functionDeclarations: tools }];
+            config.tools = [{ functionDeclarations: tools }];
             outputChannel.appendLine(`[GOOGLE] Added ${tools.length} tool definitions`);
         }
         
         // 流式生成
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         
-        const response = await ai.models.generateContentStream(requestParams);
+        // 正确的 API 调用方式
+        const response = await ai.models.generateContentStream({
+            model: currentConfig.model,
+            contents: geminiMessages,
+            config: config
+        });
         
         let hasToolCalls = false;
         let accumulatedText = '';
         
-        // 直接遍历 response（不是 response.stream）
+        // 直接遍历 response
         try {
             for await (const chunk of response) {
-                // chunk 就是 GenerateContentResponse
-                const candidate = chunk.candidates?.[0];
-                if (!candidate) continue;
+                outputChannel.appendLine(`[GOOGLE] Chunk received: ${JSON.stringify(chunk).substring(0, 500)}`);
                 
+                // chunk 就是 GenerateContentResponse
+                const candidates = chunk.candidates;
+                if (!candidates || candidates.length === 0) continue;
+                
+                const candidate = candidates[0];
                 const content = candidate.content;
-                if (!content) continue;
+                if (!content || !content.parts) continue;
+                
+                // 提取 thoughtSignature（可能在 part 级别或 content 级别）
+                let sharedThoughtSignature: string | undefined;
                 
                 // 处理文本部分
                 for (const part of content.parts) {
+                    // 提取 thoughtSignature（优先使用 part 级别的，否则使用共享的）
+                    if (part.thoughtSignature) {
+                        sharedThoughtSignature = part.thoughtSignature;
+                    }
+                    
                     if (part.text) {
                         accumulatedText += part.text;
                         res.write(JSON.stringify({ text: part.text, nodes: [], stop_reason: 0 }) + '\n');
@@ -3921,7 +3940,9 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
                             tool_use: {
                                 tool_use_id: `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                                 tool_name: part.functionCall.name,
-                                input_json: JSON.stringify(part.functionCall.args || {})
+                                input_json: JSON.stringify(part.functionCall.args || {}),
+                                // 保存 thoughtSignature（优先使用 part 级别的，否则使用共享的）
+                                thought_signature: part.thoughtSignature || part.functionCall.thoughtSignature || sharedThoughtSignature
                             }
                         };
                         
@@ -3929,12 +3950,13 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
                         applyPathFixes(toolNode.tool_use, workspaceInfo);
                         
                         res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
-                        outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                        outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}, thoughtSignature=${!!toolNode.tool_use.thought_signature}`);
                     }
                 }
             }
         } catch (streamError: any) {
             outputChannel.appendLine(`[GOOGLE STREAM ERROR] ${streamError.message}`);
+            outputChannel.appendLine(`[GOOGLE STREAM ERROR] Stack: ${streamError.stack}`);
             throw streamError;
         }
         
@@ -3960,78 +3982,159 @@ function augmentToGeminiMessages(req: any): any[] {
     
     // 处理聊天历史
     if (req.chat_history) {
-        for (const exchange of req.chat_history) {
-            // 用户消息
-            if (exchange.request_message) {
+        for (let i = 0; i < req.chat_history.length; i++) {
+            const exchange = req.chat_history[i];
+            
+            // 1. 用户消息（当前 exchange 的 request_message）
+            // 特殊处理：如果是第一个 exchange 且没有 request_message，添加占位符
+            if (i === 0 && !exchange.request_message) {
+                // Gemini 要求对话必须以 user 开头
+                // 如果第一个 exchange 没有 request_message，说明初始用户消息在第一次请求时发送
+                // 我们需要添加一个占位符，内容可以从 req.message 或其他地方获取
+                // 但由于我们不知道原始消息，使用一个通用占位符
+                messages.push({
+                    role: 'user',
+                    parts: [{ text: 'Continue with the previous request.' }]
+                });
+                outputChannel.appendLine(`[GOOGLE] Exchange ${i} user: [placeholder for missing request_message]`);
+            } else if (exchange.request_message) {
                 messages.push({
                     role: 'user',
                     parts: [{ text: exchange.request_message }]
                 });
+                outputChannel.appendLine(`[GOOGLE] Exchange ${i} user: "${exchange.request_message.slice(0, 50)}..."`);
             }
             
-            // 助手响应
+            // 2. 模型响应（当前 exchange 的 response_nodes）
             const responseNodes = exchange.response_nodes || [];
-            const parts: any[] = [];
+            const modelParts: any[] = [];
+            let hasToolCall = false;
             
             for (const node of responseNodes) {
                 if (node.type === 0 && node.text_node) {
-                    parts.push({ text: node.text_node.content });
+                    modelParts.push({ text: node.text_node.content });
                 } else if (node.type === 5 && node.tool_use) {
+                    hasToolCall = true;
                     const tu = node.tool_use;
-                    parts.push({
-                        functionCall: {
-                            name: tu.tool_name || tu.name,
-                            args: JSON.parse(tu.input_json || '{}')
+                    const functionCall: any = {
+                        name: tu.tool_name || tu.name,
+                        args: JSON.parse(tu.input_json || '{}')
+                    };
+                    
+                    // Gemini 3.0 要求 thoughtSignature 在 part 级别
+                    // 从 tool_use 中提取（如果有）
+                    const part: any = { functionCall };
+                    if (tu.thought_signature) {
+                        part.thoughtSignature = tu.thought_signature;
+                        outputChannel.appendLine(`[GOOGLE] Adding thoughtSignature to part: ${tu.thought_signature.substring(0, 50)}...`);
+                    } else {
+                        outputChannel.appendLine(`[GOOGLE] WARNING: No thought_signature found for tool ${tu.tool_name}`);
+                    }
+                    
+                    modelParts.push(part);
+                }
+            }
+            
+            if (modelParts.length > 0) {
+                messages.push({ role: 'model', parts: modelParts });
+                outputChannel.appendLine(`[GOOGLE] Exchange ${i} model: ${modelParts.length} parts, has tool call: ${hasToolCall}`);
+            }
+            
+            // 3. 工具结果（当前 exchange 的 request_nodes）
+            // 这些工具结果应该和下一个 exchange 的 request_message 合并
+            // 或者和当前请求的 message 合并（如果这是最后一个 exchange）
+            const requestNodes = exchange.request_nodes || [];
+            const toolResults: any[] = [];
+            
+            for (const node of requestNodes) {
+                if (node.type === 1 && node.tool_result_node) {
+                    const tr = node.tool_result_node;
+                    toolResults.push({
+                        functionResponse: {
+                            name: tr.tool_name || 'unknown',
+                            response: { result: tr.content || '' }
                         }
                     });
                 }
             }
             
-            if (parts.length > 0) {
-                messages.push({ role: 'model', parts });
-            }
-            
-            // 工具结果
-            const requestNodes = exchange.request_nodes || [];
-            for (const node of requestNodes) {
-                if (node.type === 1 && node.tool_result_node) {
-                    const tr = node.tool_result_node;
+            // 如果有工具结果，需要和下一个用户消息合并
+            if (toolResults.length > 0) {
+                const nextExchange = req.chat_history[i + 1];
+                const userParts: any[] = [...toolResults];
+                
+                // 检查是否有下一个 exchange 的 request_message
+                if (nextExchange && nextExchange.request_message) {
+                    userParts.push({ text: nextExchange.request_message });
+                    outputChannel.appendLine(`[GOOGLE] Exchange ${i} tool results (${toolResults.length}) merged with exchange ${i+1} user message`);
+                    
                     messages.push({
                         role: 'user',
-                        parts: [{
-                            functionResponse: {
-                                name: tr.tool_name || 'unknown',
-                                response: { result: tr.content || '' }
-                            }
-                        }]
+                        parts: userParts
                     });
+                    
+                    // 处理下一个 exchange 的 response_nodes
+                    const nextResponseNodes = nextExchange.response_nodes || [];
+                    const nextModelParts: any[] = [];
+                    let nextHasToolCall = false;
+                    
+                    for (const node of nextResponseNodes) {
+                        if (node.type === 0 && node.text_node) {
+                            nextModelParts.push({ text: node.text_node.content });
+                        } else if (node.type === 5 && node.tool_use) {
+                            nextHasToolCall = true;
+                            const tu = node.tool_use;
+                            const functionCall: any = {
+                                name: tu.tool_name || tu.name,
+                                args: JSON.parse(tu.input_json || '{}')
+                            };
+                            
+                            // Gemini 3.0 要求 thoughtSignature 在 part 级别
+                            const part: any = { functionCall };
+                            if (tu.thought_signature) {
+                                part.thoughtSignature = tu.thought_signature;
+                            }
+                            
+                            nextModelParts.push(part);
+                        }
+                    }
+                    
+                    if (nextModelParts.length > 0) {
+                        messages.push({ role: 'model', parts: nextModelParts });
+                        outputChannel.appendLine(`[GOOGLE] Exchange ${i+1} model: ${nextModelParts.length} parts, has tool call: ${nextHasToolCall}`);
+                    }
+                    
+                    // 跳过下一个 exchange（已经处理过了）
+                    i++;
+                } else {
+                    // 没有下一个 exchange，工具结果会在当前请求的 nodes 里处理
+                    outputChannel.appendLine(`[GOOGLE] Exchange ${i} has ${toolResults.length} tool results, will be merged with current request`);
                 }
             }
         }
     }
     
-    // 当前请求的工具结果
+    // 当前请求的工具结果和消息
+    const currentUserParts: any[] = [];
+    
+    // 先添加工具结果
+    let currentToolCount = 0;
     for (const node of req.nodes || []) {
         if (node.type === 1 && node.tool_result_node) {
+            currentToolCount++;
             const tr = node.tool_result_node;
-            messages.push({
-                role: 'user',
-                parts: [{
-                    functionResponse: {
-                        name: tr.tool_name || 'unknown',
-                        response: { result: tr.content || '' }
-                    }
-                }]
+            currentUserParts.push({
+                functionResponse: {
+                    name: tr.tool_name || 'unknown',
+                    response: { result: tr.content || '' }
+                }
             });
         }
     }
     
-    // 当前用户消息
+    // 然后添加当前用户消息
     if (req.message && req.message !== '...') {
-        const parts: any[] = [];
-        
-        // 添加文本
-        parts.push({ text: req.message });
+        currentUserParts.push({ text: req.message });
         
         // 处理图片
         for (const node of req.nodes || []) {
@@ -4044,7 +4147,7 @@ function augmentToGeminiMessages(req: any): any[] {
                     4: 'image/webp'
                 };
                 
-                parts.push({
+                currentUserParts.push({
                     inlineData: {
                         mimeType: formatMap[imageNode.format] || 'image/png',
                         data: imageNode.image_data
@@ -4052,9 +4155,26 @@ function augmentToGeminiMessages(req: any): any[] {
                 });
             }
         }
-        
-        messages.push({ role: 'user', parts });
     }
+    
+    if (currentUserParts.length > 0) {
+        messages.push({ role: 'user', parts: currentUserParts });
+        outputChannel.appendLine(`[GOOGLE] Current user: ${currentToolCount} tool results, has text: ${!!(req.message && req.message !== '...')}`);
+    }
+    
+    // 打印最终的消息序列
+    outputChannel.appendLine(`[GOOGLE] Final message sequence: ${messages.map(m => m.role).join(' → ')}`);
+    
+    // 打印每个消息的详细结构（用于调试）
+    messages.forEach((msg, i) => {
+        if (msg.role === 'model' && msg.parts) {
+            msg.parts.forEach((part: any, j: number) => {
+                if (part.functionCall) {
+                    outputChannel.appendLine(`[GOOGLE] Message ${i} part ${j}: functionCall=${part.functionCall.name}, has thoughtSignature=${!!part.thoughtSignature}`);
+                }
+            });
+        }
+    });
     
     return messages;
 }
