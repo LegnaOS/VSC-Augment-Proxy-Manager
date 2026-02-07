@@ -301,10 +301,24 @@ function handleModelConfig(res) {
 }
 function handleGetModels(res) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
+    
     // 🔑 关键修复：伪装成 Anthropic Claude 模型
     // Augment 可能根据模型名称/provider 决定是否启用 Agent 模式
     // 使用 Claude 模型名称来触发 Agent 工具加载
-    const fakeClaudeModelId = "claude-opus-4.5";  // 伪装的 Claude Opus 4.5 模型 ID
+    
+    // 动态选择最新的 Claude 模型版本
+    // 优先级：4.6 > 4.5 > opus-4 > sonnet-4
+    const claudeVersions = [
+        "claude-opus-4.6",
+        "claude-opus-4.5", 
+        "claude-4-opus",
+        "claude-sonnet-4.5",
+        "claude-4-sonnet"
+    ];
+    
+    // 默认使用最新版本
+    const fakeClaudeModelId = claudeVersions[0];
+    
     const modelInfo = {
         id: fakeClaudeModelId,                    // 伪装成 Claude
         name: fakeClaudeModelId,                  // 模型显示名称
@@ -319,7 +333,9 @@ function handleGetModels(res) {
         // Agent 模式标志
         chat_mode: "REMOTE_AGENT"
     };
+    
     outputChannel.appendLine(`[GET-MODELS] Returning fake Claude model: ${fakeClaudeModelId} (actual: ${currentConfig.model})`);
+    
     res.end(JSON.stringify({
         models: [modelInfo],
         default_model: fakeClaudeModelId
@@ -1586,6 +1602,9 @@ function convertToolDefinitions(toolDefs) {
 }
 // 转发到 Anthropic 格式 API (流式，发送增量)
 async function forwardToAnthropicStream(augmentReq, res) {
+    // 应用通用上下文压缩
+    await applyContextCompression(augmentReq, 'Anthropic/MiniMax/DeepSeek/GLM');
+    
     const messages = augmentToAnthropicMessages(augmentReq);
     const system = buildSystemPrompt(augmentReq);
     // 提取工作区信息，用于后续路径修正
@@ -2399,6 +2418,9 @@ function filterCodebaseSearchCalls(toolCalls: Array<{ id: string; name: string; 
 // 注意：OpenAI 格式不完全支持多模态，图片会转为描述文本
 // 🔥 v1.5.0: 支持 codebase_search 工具循环调用
 async function forwardToOpenAIStream(augmentReq: any, res: any) {
+    // 应用通用上下文压缩
+    await applyContextCompression(augmentReq, 'OpenAI');
+    
     const system = buildSystemPrompt(augmentReq);
     // 提取工作区信息，用于后续路径修正
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
@@ -3948,6 +3970,70 @@ async function deactivate() {
     }
 }
 
+// ========== 通用上下文压缩函数 ==========
+async function applyContextCompression(augmentReq: any, providerName: string = 'unknown') {
+    const config = vscode.workspace.getConfiguration('augmentProxy.google');
+    const enableCompression = config.get('enableContextCompression', true) as boolean;
+    const compressionThresholdPercent = config.get('compressionThreshold', 80) as number;
+    const compressionThreshold = compressionThresholdPercent / 100;
+    
+    if (!enableCompression || !augmentReq.chat_history || augmentReq.chat_history.length === 0) {
+        return;
+    }
+    
+    // 动态获取模型的上下文限制
+    const modelName = currentConfig.model || 'unknown';
+    const { getModelContextLimit, compressChatHistoryByTokens, getContextStats } = require('./context-manager');
+    const tokenLimit = getModelContextLimit(modelName);
+    
+    outputChannel.appendLine(`[CONTEXT] 提供商: ${providerName}, 模型: ${modelName}, 上下文限制: ${tokenLimit} tokens, 压缩阈值: ${compressionThresholdPercent}%`);
+    
+    // 获取当前上下文统计
+    const contextStats = getContextStats(augmentReq.chat_history, tokenLimit, compressionThreshold);
+    outputChannel.appendLine(`[CONTEXT] 📊 统计: ${contextStats.total_exchanges} 次交互, ~${contextStats.estimated_tokens} tokens (${contextStats.usage_percentage.toFixed(1)}%)`);
+    
+    // 更新侧边栏状态
+    if (sidebarProvider) {
+        sidebarProvider.updateContextStatus({
+            total_exchanges: contextStats.total_exchanges,
+            estimated_tokens: contextStats.estimated_tokens,
+            token_limit: tokenLimit,
+            usage_percentage: contextStats.usage_percentage,
+            compressed: false
+        });
+    }
+    
+    // 如果需要压缩
+    if (contextStats.needs_compression) {
+        const compressionResult = await compressChatHistoryByTokens(
+            augmentReq.chat_history,
+            tokenLimit,
+            0.4, // 目标使用率 40%
+            compressionThreshold
+        );
+        
+        if (compressionResult.compressed_count < compressionResult.original_count) {
+            augmentReq.chat_history = compressionResult.compressed_exchanges;
+            outputChannel.appendLine(`[CONTEXT] ✂️ 压缩: ${compressionResult.original_count} → ${compressionResult.compressed_count} 次交互`);
+            outputChannel.appendLine(`[CONTEXT] 📉 Token: ${compressionResult.estimated_tokens_before} → ${compressionResult.estimated_tokens_after} (${(compressionResult.compression_ratio * 100).toFixed(1)}%)`);
+            if (compressionResult.summary) {
+                outputChannel.appendLine(`[CONTEXT] 📝 摘要: ${compressionResult.summary.slice(0, 80)}...`);
+            }
+            
+            // 更新压缩后的状态
+            if (sidebarProvider) {
+                sidebarProvider.updateContextStatus({
+                    total_exchanges: compressionResult.compressed_count,
+                    estimated_tokens: compressionResult.estimated_tokens_after,
+                    token_limit: tokenLimit,
+                    usage_percentage: (compressionResult.estimated_tokens_after / tokenLimit) * 100,
+                    compressed: true
+                });
+            }
+        }
+    }
+}
+
 // ========== Google Gemini API 转发函数 ==========
 async function forwardToGoogleStream(augmentReq: any, res: any) {
     const { GoogleGenAI } = require('@google/genai');
@@ -3955,71 +4041,8 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     
-    // 智能压缩上下文历史（基于 token 使用率）
-    const config = vscode.workspace.getConfiguration('augmentProxy.google');
-    const enableCompression = config.get('enableContextCompression', true) as boolean;
-    const compressionThresholdPercent = config.get('compressionThreshold', 80) as number;
-    const compressionThreshold = compressionThresholdPercent / 100; // 转换为小数
-    
-    // 动态获取模型的上下文限制
-    const modelName = currentConfig.model || 'gemini-3-pro-preview';
-    const { getModelContextLimit } = require('./context-manager');
-    const tokenLimit = getModelContextLimit(modelName);
-    
-    outputChannel.appendLine(`[CONTEXT] 模型: ${modelName}, 上下文限制: ${tokenLimit} tokens, 压缩阈值: ${compressionThresholdPercent}%`);
-    
-    let contextStats: any = null;
-    let wasCompressed = false;
-    
-    if (enableCompression && augmentReq.chat_history && augmentReq.chat_history.length > 0) {
-        const { compressChatHistoryByTokens, getContextStats } = require('./context-manager');
-        
-        // 获取当前上下文统计
-        contextStats = getContextStats(augmentReq.chat_history, tokenLimit, compressionThreshold);
-        outputChannel.appendLine(`[CONTEXT] 📊 统计: ${contextStats.total_exchanges} 次交互, ~${contextStats.estimated_tokens} tokens (${contextStats.usage_percentage.toFixed(1)}%)`);
-        
-        // 更新侧边栏状态
-        if (sidebarProvider) {
-            sidebarProvider.updateContextStatus({
-                total_exchanges: contextStats.total_exchanges,
-                estimated_tokens: contextStats.estimated_tokens,
-                token_limit: tokenLimit,
-                usage_percentage: contextStats.usage_percentage,
-                compressed: false
-            });
-        }
-        
-        // 如果需要压缩
-        if (contextStats.needs_compression) {
-            const compressionResult = await compressChatHistoryByTokens(
-                augmentReq.chat_history,
-                tokenLimit,
-                0.4, // 目标使用率 40%
-                compressionThreshold
-            );
-            
-            if (compressionResult.compressed_count < compressionResult.original_count) {
-                augmentReq.chat_history = compressionResult.compressed_exchanges;
-                wasCompressed = true;
-                outputChannel.appendLine(`[CONTEXT] ✂️ 压缩: ${compressionResult.original_count} → ${compressionResult.compressed_count} 次交互`);
-                outputChannel.appendLine(`[CONTEXT] 📉 Token: ${compressionResult.estimated_tokens_before} → ${compressionResult.estimated_tokens_after} (${(compressionResult.compression_ratio * 100).toFixed(1)}%)`);
-                if (compressionResult.summary) {
-                    outputChannel.appendLine(`[CONTEXT] 📝 摘要: ${compressionResult.summary.slice(0, 80)}...`);
-                }
-                
-                // 更新压缩后的状态
-                if (sidebarProvider) {
-                    sidebarProvider.updateContextStatus({
-                        total_exchanges: compressionResult.compressed_count,
-                        estimated_tokens: compressionResult.estimated_tokens_after,
-                        token_limit: tokenLimit,
-                        usage_percentage: (compressionResult.estimated_tokens_after / tokenLimit) * 100,
-                        compressed: true
-                    });
-                }
-            }
-        }
-    }
+    // 应用通用上下文压缩
+    await applyContextCompression(augmentReq, 'Google Gemini');
     
     // 转换工具定义
     const rawTools = augmentReq.tool_definitions || [];
@@ -4301,7 +4324,18 @@ function augmentToGeminiMessages(req: any): any[] {
             
             // 如果有工具结果，需要和下一个用户消息合并
             if (toolResults.length > 0) {
-                const nextExchange = req.chat_history[i + 1];
+                // 查找下一个有效的 exchange（跳过空的）
+                let nextExchange = null;
+                let skipCount = 0;
+                for (let j = i + 1; j < req.chat_history.length; j++) {
+                    const candidate = req.chat_history[j];
+                    if (candidate.response_nodes && candidate.response_nodes.length > 0) {
+                        nextExchange = candidate;
+                        skipCount = j - i;
+                        break;
+                    }
+                }
+                
                 const userParts: any[] = [...toolResults];
                 
                 // 检查是否有下一个 exchange 的 request_message
@@ -4342,8 +4376,12 @@ function augmentToGeminiMessages(req: any): any[] {
                         }
                     }
                     
-                    // 跳过下一个 exchange（已经处理过了）
-                    i++;
+                    // 跳过已处理的 exchange（包括空的）
+                    i += skipCount;
+                } else {
+                    // 没有下一个有效的 exchange，工具结果会在当前请求的 nodes 里处理
+                    // 或者添加到当前消息中
+                    outputChannel.appendLine(`[GOOGLE] Tool results without next exchange, will be added to current request`);
                 }
             }
         }
