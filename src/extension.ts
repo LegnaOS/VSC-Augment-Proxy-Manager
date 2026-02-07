@@ -3896,39 +3896,51 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         let hasToolCalls = false;
         let accumulatedText = '';
         
-        for await (const chunk of result.stream) {
-            const candidate = chunk.candidates?.[0];
-            if (!candidate) continue;
-            
-            const content = candidate.content;
-            if (!content) continue;
-            
-            // 处理文本部分
-            for (const part of content.parts) {
-                if (part.text) {
-                    accumulatedText += part.text;
-                    res.write(JSON.stringify({ text: part.text, nodes: [], stop_reason: 0 }) + '\n');
-                }
+        // 检查 result 是否有 stream 属性
+        if (!result || !result.stream) {
+            outputChannel.appendLine(`[GOOGLE ERROR] Invalid response format: ${JSON.stringify(result)}`);
+            throw new Error('Invalid API response format');
+        }
+        
+        // 使用 for await 遍历流
+        try {
+            for await (const chunk of result.stream) {
+                const candidate = chunk.candidates?.[0];
+                if (!candidate) continue;
                 
-                // 处理函数调用
-                if (part.functionCall) {
-                    hasToolCalls = true;
-                    const toolNode = {
-                        type: 5, // TOOL_USE
-                        tool_use: {
-                            tool_use_id: `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                            tool_name: part.functionCall.name,
-                            input_json: JSON.stringify(part.functionCall.args || {})
-                        }
-                    };
+                const content = candidate.content;
+                if (!content) continue;
+                
+                // 处理文本部分
+                for (const part of content.parts) {
+                    if (part.text) {
+                        accumulatedText += part.text;
+                        res.write(JSON.stringify({ text: part.text, nodes: [], stop_reason: 0 }) + '\n');
+                    }
                     
-                    // 应用路径修正
-                    applyPathFixes(toolNode.tool_use, workspaceInfo);
-                    
-                    res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
-                    outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                    // 处理函数调用
+                    if (part.functionCall) {
+                        hasToolCalls = true;
+                        const toolNode = {
+                            type: 5, // TOOL_USE
+                            tool_use: {
+                                tool_use_id: `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                tool_name: part.functionCall.name,
+                                input_json: JSON.stringify(part.functionCall.args || {})
+                            }
+                        };
+                        
+                        // 应用路径修正
+                        applyPathFixes(toolNode.tool_use, workspaceInfo);
+                        
+                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+                        outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                    }
                 }
             }
+        } catch (streamError: any) {
+            outputChannel.appendLine(`[GOOGLE STREAM ERROR] ${streamError.message}`);
+            throw streamError;
         }
         
         // 发送结束标记
@@ -3940,7 +3952,10 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         
     } catch (error: any) {
         outputChannel.appendLine(`[GOOGLE ERROR] ${error.message}`);
-        sendAugmentError(res, error.message);
+        outputChannel.appendLine(`[GOOGLE ERROR] Stack: ${error.stack}`);
+        if (!res.headersSent) {
+            sendAugmentError(res, error.message);
+        }
     }
 }
 
