@@ -74,13 +74,14 @@ let currentConfig = {
     enableThinking: true
 };
 // Provider 配置
-const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'custom'];
+const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'custom'];
 const PROVIDER_NAMES = {
     minimax: 'MiniMax',
     anthropic: 'Anthropic',
     deepseek: 'DeepSeek',
     glm: 'GLM (智谱)',
     openai: 'OpenAI',
+    google: 'Google Gemini',
     custom: '自定义'
 };
 const DEFAULT_BASE_URLS = {
@@ -89,6 +90,7 @@ const DEFAULT_BASE_URLS = {
     deepseek: 'https://api.deepseek.com/anthropic/v1/messages', // DeepSeek Anthropic 兼容 API
     glm: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', // 智谱 OpenAI 兼容 API
     openai: 'https://api.openai.com/v1/chat/completions',
+    google: 'https://generativelanguage.googleapis.com/v1beta/models',
     custom: ''
 };
 const DEFAULT_MODELS = {
@@ -97,6 +99,7 @@ const DEFAULT_MODELS = {
     deepseek: 'deepseek-chat',
     glm: 'glm-4.7', // 智谱最新模型
     openai: 'gpt-4',
+    google: 'gemini-3-pro-preview', // 可选: gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206
     custom: ''
 };
 // 判断是否为 Anthropic 格式
@@ -107,6 +110,10 @@ function isAnthropicFormat(provider) {
 // 判断是否为 OpenAI 格式
 function isOpenAIFormat(provider) {
     return ['openai', 'glm'].includes(provider);
+}
+// 判断是否为 Google 格式
+function isGoogleFormat(provider) {
+    return provider === 'google';
 }
 // Augment 插件路径
 function getAugmentExtensionPath() {
@@ -1474,6 +1481,9 @@ function handleChatStream(req, res) {
                 // 转换为目标格式并转发
                 if (isAnthropicFormat(currentConfig.provider)) {
                     await forwardToAnthropicStream(augmentReq, res);
+                }
+                else if (isGoogleFormat(currentConfig.provider)) {
+                    await forwardToGoogleStream(augmentReq, res);
                 }
                 else {
                     await forwardToOpenAIStream(augmentReq, res);
@@ -3244,6 +3254,9 @@ class AugmentProxySidebarProvider {
                 case 'getConfig':
                     this.sendFullStatus();
                     break;
+                case 'fetchModels':
+                    await this.fetchModels(msg.provider);
+                    break;
             }
         });
         // 初始状态
@@ -3295,6 +3308,153 @@ class AugmentProxySidebarProvider {
             config: configData,
             embeddingStatus: this._embeddingStatus || { mode: 'local', modelLoading: false, modelReady: false, downloadProgress: 0, cacheCount: 0 }
         });
+    }
+    
+    async fetchModels(provider: string) {
+        if (!this._view) return;
+        
+        try {
+            const apiKey = await extensionContext.secrets.get(`apiKey.${provider}`);
+            if (!apiKey) {
+                this._view.webview.postMessage({
+                    type: 'modelsList',
+                    provider,
+                    models: [],
+                    error: '请先配置 API Key'
+                });
+                return;
+            }
+            
+            let models = [];
+            
+            switch (provider) {
+                case 'google':
+                    models = await this.fetchGoogleModels(apiKey);
+                    break;
+                case 'openai':
+                    models = await this.fetchOpenAIModels(apiKey);
+                    break;
+                case 'anthropic':
+                    models = this.getAnthropicModels();
+                    break;
+                case 'minimax':
+                    models = this.getMinimaxModels();
+                    break;
+                case 'deepseek':
+                    models = this.getDeepseekModels();
+                    break;
+                case 'glm':
+                    models = await this.fetchGLMModels(apiKey);
+                    break;
+                default:
+                    models = [];
+            }
+            
+            this._view.webview.postMessage({
+                type: 'modelsList',
+                provider,
+                models
+            });
+        } catch (error) {
+            this._view.webview.postMessage({
+                type: 'modelsList',
+                provider,
+                models: [],
+                error: error.message
+            });
+        }
+    }
+    
+    async fetchGoogleModels(apiKey: string) {
+        try {
+            const { GoogleGenAI } = require('@google/genai');
+            const ai = new GoogleGenAI({ apiKey });
+            
+            // Google API 列出模型
+            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey);
+            const data: any = await response.json();
+            
+            if (data.models) {
+                return data.models
+                    .filter((m: any) => m.name.includes('gemini'))
+                    .map((m: any) => ({
+                        id: m.name.replace('models/', ''),
+                        name: m.displayName || m.name.replace('models/', '')
+                    }));
+            }
+            return [];
+        } catch (error: any) {
+            outputChannel.appendLine(`[FETCH MODELS] Google error: ${error.message}`);
+            return [];
+        }
+    }
+    
+    async fetchOpenAIModels(apiKey: string) {
+        try {
+            const response = await fetch('https://api.openai.com/v1/models', {
+                headers: { 'Authorization': `Bearer ${apiKey}` }
+            });
+            const data: any = await response.json();
+            
+            if (data.data) {
+                return data.data
+                    .filter((m: any) => m.id.includes('gpt'))
+                    .map((m: any) => ({ id: m.id, name: m.id }))
+                    .sort((a: any, b: any) => b.id.localeCompare(a.id));
+            }
+            return [];
+        } catch (error: any) {
+            outputChannel.appendLine(`[FETCH MODELS] OpenAI error: ${error.message}`);
+            return [];
+        }
+    }
+    
+    async fetchGLMModels(apiKey: string) {
+        try {
+            const response = await fetch('https://open.bigmodel.cn/api/paas/v4/models', {
+                headers: { 'Authorization': `Bearer ${apiKey}` }
+            });
+            const data: any = await response.json();
+            
+            if (data.data) {
+                return data.data.map((m: any) => ({ id: m.id, name: m.id }));
+            }
+            return [];
+        } catch (error: any) {
+            outputChannel.appendLine(`[FETCH MODELS] GLM error: ${error.message}`);
+            // 返回默认模型列表
+            return [
+                { id: 'glm-4.7', name: 'GLM-4.7' },
+                { id: 'glm-4-plus', name: 'GLM-4-Plus' },
+                { id: 'glm-4-air', name: 'GLM-4-Air' },
+                { id: 'glm-4-flash', name: 'GLM-4-Flash' }
+            ];
+        }
+    }
+    
+    getAnthropicModels() {
+        return [
+            { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (2025-05-14)' },
+            { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet (2024-10-22)' },
+            { id: 'claude-3-5-sonnet-20240620', name: 'Claude 3.5 Sonnet (2024-06-20)' },
+            { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
+            { id: 'claude-3-sonnet-20240229', name: 'Claude 3 Sonnet' },
+            { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' }
+        ];
+    }
+    
+    getMinimaxModels() {
+        return [
+            { id: 'MiniMax-M2.2', name: 'MiniMax-M2.2' },
+            { id: 'MiniMax-Text-01', name: 'MiniMax-Text-01' }
+        ];
+    }
+    
+    getDeepseekModels() {
+        return [
+            { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+            { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (思考模式)' }
+        ];
     }
     _getHtml() {
         return `<!DOCTYPE html>
@@ -3370,7 +3530,14 @@ button.small { padding: 4px 8px; font-size: 11px; }
         </div>
         <div class="row">
             <label>Model</label>
-            <input type="text" id="model" placeholder="model-name">
+            <div style="display: flex; gap: 4px;">
+                <select id="modelSelect" style="flex: 1;">
+                    <option value="">-- 选择模型 --</option>
+                </select>
+                <button class="small" id="refreshModelsBtn" title="刷新模型列表">🔄</button>
+            </div>
+            <input type="text" id="model" placeholder="或手动输入模型名称" style="margin-top: 4px;">
+            <div class="info" id="modelInfo"></div>
         </div>
         <div class="row" id="formatRow" style="display:none">
             <label>API 格式 (自定义)</label>
@@ -3423,12 +3590,16 @@ button.small { padding: 4px 8px; font-size: 11px; }
 <script>
 const vscode = acquireVsCodeApi();
 let currentConfig = {};
+let availableModels = [];
 
 // 元素
 const $provider = document.getElementById('provider');
 const $apiKey = document.getElementById('apiKey');
 const $baseUrl = document.getElementById('baseUrl');
 const $model = document.getElementById('model');
+const $modelSelect = document.getElementById('modelSelect');
+const $refreshModelsBtn = document.getElementById('refreshModelsBtn');
+const $modelInfo = document.getElementById('modelInfo');
 const $format = document.getElementById('format');
 const $formatRow = document.getElementById('formatRow');
 const $port = document.getElementById('port');
@@ -3444,6 +3615,26 @@ $provider.onchange = () => {
     if (p === 'custom') $format.value = pConfig.format || 'anthropic';
     updateKeyStatus(pConfig.hasApiKey);
     $apiKey.value = '';
+    
+    // 清空模型列表
+    $modelSelect.innerHTML = '<option value="">-- 选择模型 --</option>';
+    availableModels = [];
+    $modelInfo.textContent = '';
+};
+
+// 刷新模型列表
+$refreshModelsBtn.onclick = () => {
+    const provider = $provider.value;
+    $modelInfo.textContent = '正在获取模型列表...';
+    $refreshModelsBtn.disabled = true;
+    vscode.postMessage({command: 'fetchModels', provider});
+};
+
+// 模型下拉选择
+$modelSelect.onchange = () => {
+    if ($modelSelect.value) {
+        $model.value = $modelSelect.value;
+    }
 };
 
 function updateKeyStatus(hasKey) {
@@ -3544,6 +3735,26 @@ window.addEventListener('message', e => {
         document.getElementById('injectStatus').textContent = '注入: ' + (msg.injected ? '已注入' : '未注入');
     } else if (msg.type === 'embeddingStatus') {
         updateEmbeddingUI(msg);
+    } else if (msg.type === 'modelsList') {
+        $refreshModelsBtn.disabled = false;
+        if (msg.error) {
+            $modelInfo.textContent = '❌ ' + msg.error;
+            $modelInfo.style.color = '#f44336';
+        } else if (msg.models && msg.models.length > 0) {
+            availableModels = msg.models;
+            $modelSelect.innerHTML = '<option value="">-- 选择模型 --</option>';
+            msg.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.name;
+                $modelSelect.appendChild(opt);
+            });
+            $modelInfo.textContent = '✓ 找到 ' + msg.models.length + ' 个模型';
+            $modelInfo.style.color = '#4caf50';
+        } else {
+            $modelInfo.textContent = '未找到可用模型';
+            $modelInfo.style.color = '#ff9800';
+        }
     } else if (msg.type === 'fullStatus') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
@@ -3576,6 +3787,259 @@ async function deactivate() {
 
     if (proxyServer) {
         proxyServer.close();
+    }
+}
+
+// ========== Google Gemini API 转发函数 ==========
+async function forwardToGoogleStream(augmentReq: any, res: any) {
+    const { GoogleGenAI } = require('@google/genai');
+    
+    const system = buildSystemPrompt(augmentReq);
+    const workspaceInfo = extractWorkspaceInfo(augmentReq);
+    
+    // 转换工具定义
+    const rawTools = augmentReq.tool_definitions || [];
+    const tools = convertToolDefinitionsToGemini(rawTools);
+    
+    // 转换消息
+    const geminiMessages = augmentToGeminiMessages(augmentReq);
+    
+    outputChannel.appendLine(`[GOOGLE] Sending to Gemini API with ${geminiMessages.length} messages`);
+    
+    try {
+        // 初始化 Google GenAI 客户端
+        const ai = new GoogleGenAI({ apiKey: currentConfig.apiKey });
+        
+        // 构建请求参数
+        const requestParams: any = {
+            model: currentConfig.model,
+            contents: geminiMessages,
+        };
+        
+        // 添加系统指令
+        if (system) {
+            requestParams.systemInstruction = { parts: [{ text: system }] };
+        }
+        
+        // 添加工具定义
+        if (tools && tools.length > 0) {
+            requestParams.tools = [{ functionDeclarations: tools }];
+            outputChannel.appendLine(`[GOOGLE] Added ${tools.length} tool definitions`);
+        }
+        
+        // 流式生成
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        
+        const result = await ai.models.generateContentStream(requestParams);
+        
+        let hasToolCalls = false;
+        let accumulatedText = '';
+        
+        for await (const chunk of result.stream) {
+            const candidate = chunk.candidates?.[0];
+            if (!candidate) continue;
+            
+            const content = candidate.content;
+            if (!content) continue;
+            
+            // 处理文本部分
+            for (const part of content.parts) {
+                if (part.text) {
+                    accumulatedText += part.text;
+                    res.write(JSON.stringify({ text: part.text, nodes: [], stop_reason: 0 }) + '\n');
+                }
+                
+                // 处理函数调用
+                if (part.functionCall) {
+                    hasToolCalls = true;
+                    const toolNode = {
+                        type: 5, // TOOL_USE
+                        tool_use: {
+                            tool_use_id: `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            tool_name: part.functionCall.name,
+                            input_json: JSON.stringify(part.functionCall.args || {})
+                        }
+                    };
+                    
+                    // 应用路径修正
+                    applyPathFixes(toolNode.tool_use, workspaceInfo);
+                    
+                    res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+                    outputChannel.appendLine(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                }
+            }
+        }
+        
+        // 发送结束标记
+        const stopReason = hasToolCalls ? 3 : 1;
+        res.write(JSON.stringify({ text: '', nodes: [], stop_reason: stopReason }) + '\n');
+        res.end();
+        
+        outputChannel.appendLine(`[GOOGLE] Stream complete, stop_reason=${stopReason}`);
+        
+    } catch (error: any) {
+        outputChannel.appendLine(`[GOOGLE ERROR] ${error.message}`);
+        sendAugmentError(res, error.message);
+    }
+}
+
+// 转换 Augment 消息到 Gemini 格式
+function augmentToGeminiMessages(req: any): any[] {
+    const messages: any[] = [];
+    
+    // 处理聊天历史
+    if (req.chat_history) {
+        for (const exchange of req.chat_history) {
+            // 用户消息
+            if (exchange.request_message) {
+                messages.push({
+                    role: 'user',
+                    parts: [{ text: exchange.request_message }]
+                });
+            }
+            
+            // 助手响应
+            const responseNodes = exchange.response_nodes || [];
+            const parts: any[] = [];
+            
+            for (const node of responseNodes) {
+                if (node.type === 0 && node.text_node) {
+                    parts.push({ text: node.text_node.content });
+                } else if (node.type === 5 && node.tool_use) {
+                    const tu = node.tool_use;
+                    parts.push({
+                        functionCall: {
+                            name: tu.tool_name || tu.name,
+                            args: JSON.parse(tu.input_json || '{}')
+                        }
+                    });
+                }
+            }
+            
+            if (parts.length > 0) {
+                messages.push({ role: 'model', parts });
+            }
+            
+            // 工具结果
+            const requestNodes = exchange.request_nodes || [];
+            for (const node of requestNodes) {
+                if (node.type === 1 && node.tool_result_node) {
+                    const tr = node.tool_result_node;
+                    messages.push({
+                        role: 'user',
+                        parts: [{
+                            functionResponse: {
+                                name: tr.tool_name || 'unknown',
+                                response: { result: tr.content || '' }
+                            }
+                        }]
+                    });
+                }
+            }
+        }
+    }
+    
+    // 当前请求的工具结果
+    for (const node of req.nodes || []) {
+        if (node.type === 1 && node.tool_result_node) {
+            const tr = node.tool_result_node;
+            messages.push({
+                role: 'user',
+                parts: [{
+                    functionResponse: {
+                        name: tr.tool_name || 'unknown',
+                        response: { result: tr.content || '' }
+                    }
+                }]
+            });
+        }
+    }
+    
+    // 当前用户消息
+    if (req.message && req.message !== '...') {
+        const parts: any[] = [];
+        
+        // 添加文本
+        parts.push({ text: req.message });
+        
+        // 处理图片
+        for (const node of req.nodes || []) {
+            if (node.type === 2 && node.image_node) {
+                const imageNode = node.image_node;
+                const formatMap: any = {
+                    1: 'image/png',
+                    2: 'image/jpeg',
+                    3: 'image/gif',
+                    4: 'image/webp'
+                };
+                
+                parts.push({
+                    inlineData: {
+                        mimeType: formatMap[imageNode.format] || 'image/png',
+                        data: imageNode.image_data
+                    }
+                });
+            }
+        }
+        
+        messages.push({ role: 'user', parts });
+    }
+    
+    return messages;
+}
+
+// 转换工具定义到 Gemini 格式
+function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
+    if (!toolDefs || toolDefs.length === 0) return [];
+    
+    const tools: any[] = [];
+    
+    for (const def of toolDefs) {
+        if (!def.name) continue;
+        
+        let parameters = def.input_json_schema || def.input_schema;
+        if (typeof parameters === 'string') {
+            try {
+                parameters = JSON.parse(parameters);
+            } catch (e) {
+                parameters = { type: 'object', properties: {} };
+            }
+        }
+        
+        tools.push({
+            name: def.name,
+            description: def.description || '',
+            parameters: parameters || { type: 'object', properties: {} }
+        });
+    }
+    
+    return tools;
+}
+
+// 应用路径修正（复用现有逻辑）
+function applyPathFixes(toolUse: any, workspaceInfo: any) {
+    try {
+        const input = JSON.parse(toolUse.input_json);
+        const fileTools = ['save-file', 'view', 'remove-files', 'str-replace-editor'];
+        
+        if (fileTools.includes(toolUse.tool_name) && workspaceInfo) {
+            const workspacePath = workspaceInfo.workspacePath || '';
+            const repoRoot = workspaceInfo.repositoryRoot || '';
+            
+            let relativePrefix = '';
+            if (repoRoot && workspacePath && workspacePath.startsWith(repoRoot) && workspacePath !== repoRoot) {
+                relativePrefix = workspacePath.substring(repoRoot.length).replace(/^\//, '');
+            }
+            
+            if (relativePrefix && input.path && !input.path.startsWith('/') && !input.path.startsWith(relativePrefix)) {
+                input.path = relativePrefix + '/' + input.path;
+                outputChannel.appendLine(`[PATH FIX] ${toolUse.tool_name}: path fixed`);
+            }
+        }
+        
+        toolUse.input_json = JSON.stringify(input);
+    } catch (e) {
+        // 忽略解析错误
     }
 }
 //# sourceMappingURL=extension.js.map

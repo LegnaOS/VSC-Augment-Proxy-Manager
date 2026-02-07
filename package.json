@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -75,6 +75,7 @@
             "anthropic",
             "deepseek",
             "openai",
+            "google",
             "custom"
           ],
           "enumDescriptions": [
@@ -83,6 +84,7 @@
             "Anthropic (Claude)",
             "DeepSeek",
             "OpenAI (GPT-4)",
+            "Google Gemini",
             "自定义 API"
           ],
           "description": "选择 AI API 供应商"
@@ -161,6 +163,16 @@
           "type": "string",
           "default": "gpt-4"
         },
+        "augmentProxy.google.baseUrl": {
+          "type": "string",
+          "default": "https://generativelanguage.googleapis.com/v1beta/models",
+          "description": "Google Gemini API 地址"
+        },
+        "augmentProxy.google.model": {
+          "type": "string",
+          "default": "gemini-3-pro-preview",
+          "description": "Google Gemini 模型名称 (如 gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206 等)"
+        },
         "augmentProxy.custom.baseUrl": {
           "type": "string",
           "default": ""
@@ -227,6 +239,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@google/genai": "^1.40.0",
     "@huggingface/transformers": "^3.8.1",
     "level": "^10.0.0"
   }

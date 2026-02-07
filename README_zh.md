@@ -126,6 +126,7 @@ Windows 上 VSCode 会锁定插件文件，必须完全关闭 VSCode 后注入�
 | **Anthropic** | Anthropic 原生 | claude-sonnet-4-20250514 | Claude 原生 |
 | **GLM (智谱)** | OpenAI 兼容 | glm-4.7 | 国产代码专用模型 |
 | **OpenAI** | OpenAI 原生 | gpt-4 | GPT 系列 |
+| **Google Gemini** | Google 原生 | gemini-3-pro-preview | 最新 Gemini 3.0，支持多模态 |
 | **Custom** | 可选 | 自定义 | 任意兼容端点 |
 
 ### 供应商特别说明
@@ -138,6 +139,12 @@ Windows 上 VSCode 会锁定插件文件，必须完全关闭 VSCode 后注入�
 **DeepSeek**
 - ✅ 支持 `deepseek-reasoner` 推理模式
 - ✅ 配置项：`augmentProxy.deepseek.enableThinking`
+
+**Google Gemini**
+- ✅ 支持多模态（图片理解）
+- ✅ 提供免费配额
+- ✅ 支持工具调用（Agent 模式）
+- 📖 详细配置请参考 [Google Gemini 配置指南](GOOGLE_GEMINI_SETUP.md)
 
 **Custom（自定义）**
 - 支持任何 Anthropic 或 OpenAI 兼容的 API 端点

@@ -21,3 +21,9 @@ Thumbs.db
 npm-debug.log*
 AugmentProxy日志
 Augment日志
+
+# Debug/Test files
+extract-source.js
+test-*.js
+IMPLEMENTATION_*.md
+CHANGELOG_*.md

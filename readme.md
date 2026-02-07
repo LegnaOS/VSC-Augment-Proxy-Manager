@@ -15,6 +15,7 @@ Proxy Augment Code API requests to other AI providers. Use Augment's powerful UI
 | **DeepSeek** | Anthropic Compatible | deepseek-chat |
 | **GLM (Zhipu)** | OpenAI Compatible | glm-4.7 |
 | **OpenAI** | OpenAI Native | gpt-4 |
+| **Google Gemini** | Google Native | gemini-3-pro-preview |
 | **Custom** | Anthropic/OpenAI | - |
 
 ## Usage
