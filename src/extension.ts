@@ -3864,6 +3864,29 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     
+    // 智能压缩上下文历史
+    const config = vscode.workspace.getConfiguration('augmentProxy.google');
+    const enableCompression = config.get('enableContextCompression', true) as boolean;
+    const compressionThreshold = config.get('contextCompressionThreshold', 8) as number;
+    const keepRecentCount = config.get('keepRecentCount', 3) as number;
+    
+    if (enableCompression && augmentReq.chat_history && augmentReq.chat_history.length > compressionThreshold) {
+        const { compressChatHistory } = require('./context-manager');
+        const compressionResult = await compressChatHistory(
+            augmentReq.chat_history,
+            keepRecentCount,
+            compressionThreshold
+        );
+        
+        if (compressionResult.compressed_count < compressionResult.original_count) {
+            augmentReq.chat_history = compressionResult.compressed_exchanges;
+            outputChannel.appendLine(`[CONTEXT] Compressed history: ${compressionResult.original_count} → ${compressionResult.compressed_count} exchanges`);
+            if (compressionResult.summary) {
+                outputChannel.appendLine(`[CONTEXT] Summary: ${compressionResult.summary.slice(0, 100)}...`);
+            }
+        }
+    }
+    
     // 转换工具定义
     const rawTools = augmentReq.tool_definitions || [];
     const tools = convertToolDefinitionsToGemini(rawTools);

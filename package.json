@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -172,6 +172,21 @@
           "type": "string",
           "default": "gemini-3-pro-preview",
           "description": "Google Gemini 模型名称 (如 gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206 等)"
+        },
+        "augmentProxy.google.enableContextCompression": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用智能上下文压缩 (保留最近3次完整交互，压缩更早的历史)"
+        },
+        "augmentProxy.google.contextCompressionThreshold": {
+          "type": "number",
+          "default": 8,
+          "description": "触发上下文压缩的历史长度阈值"
+        },
+        "augmentProxy.google.keepRecentCount": {
+          "type": "number",
+          "default": 3,
+          "description": "保留最近几次完整交互（不压缩）"
         },
         "augmentProxy.custom.baseUrl": {
           "type": "string",
