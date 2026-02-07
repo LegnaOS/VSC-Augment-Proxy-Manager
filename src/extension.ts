@@ -1545,8 +1545,19 @@ function handleChatStream(req, res) {
             }
         }
         catch (error) {
-            outputChannel.appendLine(`[ERROR] ${error.message}`);
-            sendAugmentError(res, error.message);
+            outputChannel.appendLine(`[ERROR] ${error.message || error}`);
+            outputChannel.appendLine(`[ERROR] Stack: ${error.stack}`);
+            // 确保总是发送响应
+            if (!res.headersSent) {
+                sendAugmentError(res, error.message || 'Unknown error');
+            } else {
+                try {
+                    res.write(JSON.stringify({ text: `\n\n[Error: ${error.message}]`, nodes: [], stop_reason: 1 }) + '\n');
+                    res.end();
+                } catch (e) {
+                    outputChannel.appendLine(`[ERROR] Failed to send error response: ${e}`);
+                }
+            }
         }
     });
 }
@@ -1927,11 +1938,44 @@ async function forwardToAnthropicStream(augmentReq, res) {
             res.end();
             outputChannel.appendLine(`[API] Stream complete, stop_reason=${stopReason} (hasToolUse=${hasToolUse}, apiStopReason=${apiStopReason})`);
         });
+        
+        // 🔥 添加错误处理 - 确保响应总是被关闭
+        apiRes.on('error', (err) => {
+            outputChannel.appendLine(`[API RESPONSE ERROR] ${err.message}`);
+            if (!res.headersSent) {
+                sendAugmentError(res, `API response error: ${err.message}`);
+            } else {
+                try {
+                    res.write(JSON.stringify({ text: '\n\n[Response error]', nodes: [], stop_reason: 1 }) + '\n');
+                    res.end();
+                } catch (e) {
+                    outputChannel.appendLine(`[API RESPONSE ERROR] Error sending error response: ${e}`);
+                }
+            }
+        });
     });
     apiReq.on('error', (err) => {
         outputChannel.appendLine(`[API ERROR] ${err.message}`);
         sendAugmentError(res, err.message);
     });
+    
+    // 🔥 添加超时处理 - 防止请求挂起导致 Augment 等待 100 秒
+    apiReq.setTimeout(90000, () => {
+        outputChannel.appendLine(`[API TIMEOUT] Request to ${currentConfig.provider} timed out after 90s`);
+        apiReq.destroy();
+        if (!res.headersSent) {
+            sendAugmentError(res, 'API request timeout after 90 seconds');
+        } else {
+            // 如果已经发送了部分响应，发送结束标记
+            try {
+                res.write(JSON.stringify({ text: '\n\n[Request timed out]', nodes: [], stop_reason: 1 }) + '\n');
+                res.end();
+            } catch (e) {
+                outputChannel.appendLine(`[API TIMEOUT] Error sending timeout response: ${e}`);
+            }
+        }
+    });
+    
     apiReq.write(apiBody);
     apiReq.end();
 }
