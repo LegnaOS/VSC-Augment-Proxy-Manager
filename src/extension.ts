@@ -3891,20 +3891,15 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         // 流式生成
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         
-        const result = await ai.models.generateContentStream(requestParams);
+        const response = await ai.models.generateContentStream(requestParams);
         
         let hasToolCalls = false;
         let accumulatedText = '';
         
-        // 检查 result 是否有 stream 属性
-        if (!result || !result.stream) {
-            outputChannel.appendLine(`[GOOGLE ERROR] Invalid response format: ${JSON.stringify(result)}`);
-            throw new Error('Invalid API response format');
-        }
-        
-        // 使用 for await 遍历流
+        // 直接遍历 response（不是 response.stream）
         try {
-            for await (const chunk of result.stream) {
+            for await (const chunk of response) {
+                // chunk 就是 GenerateContentResponse
                 const candidate = chunk.candidates?.[0];
                 if (!candidate) continue;
                 
