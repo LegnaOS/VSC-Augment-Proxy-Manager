@@ -3367,25 +3367,85 @@ class AugmentProxySidebarProvider {
     
     async fetchGoogleModels(apiKey: string) {
         try {
-            const { GoogleGenAI } = require('@google/genai');
-            const ai = new GoogleGenAI({ apiKey });
-            
             // Google API 列出模型
-            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey);
+            const url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey;
+            outputChannel.appendLine(`[FETCH MODELS] Fetching Google models...`);
+            
+            const response = await fetch(url);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                outputChannel.appendLine(`[FETCH MODELS] Google API error: ${response.status} ${errorText}`);
+                throw new Error(`API 返回错误: ${response.status}`);
+            }
+            
             const data: any = await response.json();
             
-            if (data.models) {
-                return data.models
-                    .filter((m: any) => m.name.includes('gemini'))
+            if (data.models && Array.isArray(data.models)) {
+                const models = data.models
+                    // 只保留 Gemini 聊天模型（排除 Gemma、Imagen、Veo、embedding 等）
+                    .filter((m: any) => {
+                        const name = m.name || '';
+                        const methods = m.supportedGenerationMethods || [];
+                        // 必须包含 generateContent 方法
+                        const hasGenerateContent = methods.includes('generateContent');
+                        // 必须是 gemini 开头（排除 gemma、imagen、veo 等）
+                        const isGemini = name.includes('models/gemini-') && !name.includes('gemma') && !name.includes('embedding');
+                        // 排除特殊用途模型
+                        const isNotSpecial = !name.includes('tts') && !name.includes('image') && !name.includes('audio') && 
+                                            !name.includes('robotics') && !name.includes('computer-use') && !name.includes('deep-research');
+                        return hasGenerateContent && isGemini && isNotSpecial;
+                    })
                     .map((m: any) => ({
                         id: m.name.replace('models/', ''),
-                        name: m.displayName || m.name.replace('models/', '')
-                    }));
+                        name: m.displayName || m.name.replace('models/', ''),
+                        description: m.description || ''
+                    }))
+                    .sort((a: any, b: any) => {
+                        // 排序优先级：gemini-3 > gemini-2.5 > gemini-2 > gemini-1
+                        // 同版本内：pro > flash > flash-lite
+                        const getScore = (id: string) => {
+                            let score = 0;
+                            // 版本分数
+                            if (id.includes('gemini-3')) score += 3000;
+                            else if (id.includes('gemini-2.5')) score += 2500;
+                            else if (id.includes('gemini-2')) score += 2000;
+                            else if (id.includes('gemini-1')) score += 1000;
+                            
+                            // 类型分数
+                            if (id.includes('pro')) score += 300;
+                            else if (id.includes('flash') && !id.includes('lite')) score += 200;
+                            else if (id.includes('lite')) score += 100;
+                            
+                            // latest 优先
+                            if (id.includes('latest')) score += 50;
+                            // preview 次之
+                            if (id.includes('preview')) score += 30;
+                            // exp 再次
+                            if (id.includes('exp')) score += 20;
+                            
+                            return score;
+                        };
+                        return getScore(b.id) - getScore(a.id);
+                    });
+                
+                outputChannel.appendLine(`[FETCH MODELS] Found ${models.length} Google Gemini models`);
+                return models;
             }
+            
+            outputChannel.appendLine(`[FETCH MODELS] No models found in response`);
             return [];
         } catch (error: any) {
             outputChannel.appendLine(`[FETCH MODELS] Google error: ${error.message}`);
-            return [];
+            // 返回默认模型列表作为后备
+            return [
+                { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: 'Latest Gemini 3 Pro' },
+                { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', description: 'Latest Gemini 3 Flash' },
+                { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Stable Gemini 2.5 Pro' },
+                { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable Gemini 2.5 Flash' },
+                { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Gemini 2.0 Flash' },
+                { id: 'gemini-exp-1206', name: 'Gemini Experimental 1206', description: 'Experimental release' }
+            ];
         }
     }
     
