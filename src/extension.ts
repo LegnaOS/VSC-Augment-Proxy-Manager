@@ -4330,6 +4330,16 @@ function augmentToGeminiMessages(req: any): any[] {
         messages.push({ role: 'user', parts: currentUserParts });
     }
     
+    // Gemini API 要求至少有一条消息
+    // 如果 messages 为空（没有历史记录且当前消息是 "..."），添加一个占位符
+    if (messages.length === 0) {
+        outputChannel.appendLine(`[GOOGLE] WARNING: No messages generated, adding placeholder`);
+        messages.push({
+            role: 'user',
+            parts: [{ text: 'Please continue with the task.' }]
+        });
+    }
+    
     // 打印最终的消息序列
     outputChannel.appendLine(`[GOOGLE] Final message sequence: ${messages.map(m => m.role).join(' → ')}`);
     

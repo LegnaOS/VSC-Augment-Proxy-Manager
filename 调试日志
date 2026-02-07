@@ -1,7 +1,7 @@
 Augment Proxy Manager 已激活
 [RAG] Initializing LevelDB storage...
 [RAG] Indexing files in /Users/legna/Augment...
-[RAG] Index ready: 19 documents, checkpoint 0, took 0.05s
+[RAG] Index ready: 20 documents, checkpoint 0, took 0.07s
 [RAG] 🧠 Loading transformers.js...
 [RAG] 📥 Downloading model: all-MiniLM-L6-v2...
 [RAG] ✅ Model downloaded
@@ -12,17 +12,24 @@ Augment Proxy Manager 已激活
 [RAG] 🧠 Semantic engine ready (local model)
 [RAG] 🧠 Semantic search enabled (transformers.js)
 [RAG] 🔄 Pre-generating embeddings...
-[RAG] 🔄 Pre-generating embeddings for 19 documents...
-[RAG] ✅ Embeddings ready: 21 documents cached
+[RAG] 🔄 Pre-generating embeddings for 20 documents...
+[RAG] Embedding progress: 20/20
+[RAG] ✅ Embeddings ready: 22 documents cached
 [FETCH MODELS] Fetching Google models...
 [FETCH MODELS] Found 15 Google Gemini models
 === 代理服务器启动 ===
 Provider: Google Gemini
 端口: 8765
 Base URL: https://generativelanguage.googleapis.com/v1beta/models
-Model: gemini-2.5-pro
-[2026-02-07T08:26:47.100Z] GET /health
-[2026-02-07T08:26:50.524Z] POST /chat-stream
+Model: gemini-3-pro-preview
+[2026-02-07T08:31:58.161Z] GET /health
+[2026-02-07T08:31:58.678Z] POST /record-session-events
+[2026-02-07T08:31:58.698Z] POST /record-session-events
+[2026-02-07T08:31:58.701Z] POST /record-session-events
+[2026-02-07T08:31:58.702Z] POST /client-metrics
+[2026-02-07T08:31:58.703Z] POST /record-session-events
+[2026-02-07T08:31:58.704Z] POST /report-feature-vector
+[2026-02-07T08:31:59.338Z] POST /chat-stream
 [CHAT-STREAM] message: "继续帮我逆向Augment插件，看一下能不能还原augment的源代码..." history: 0
 [DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
 [DEBUG] nodes count: 2
@@ -33,165 +40,38 @@ Model: gemini-2.5-pro
 [DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
 [DEBUG] user_guided_blobs: array[0]
 [DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-2.5-pro, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
 [GOOGLE] Final message sequence: user
 [GOOGLE] Sending to Gemini API with 1 messages
 [GOOGLE] System prompt length: 3859 chars
 [GOOGLE] ✓ Gemini-specific behavior guidelines included
 [GOOGLE] Added 61 tool definitions
-[2026-02-07T08:26:52.108Z] GET /health
-[GOOGLE ERROR] exception TypeError: fetch failed sending request
-[GOOGLE ERROR] Stack: Error: exception TypeError: fetch failed sending request
-	at /Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.5/node_modules/@google/genai/dist/node/index.cjs:12031:19
-	at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-	at async Models.generateContentStream (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.5/node_modules/@google/genai/dist/node/index.cjs:13350:24)
-	at async /Users/legna/.vscode/extensions/augment.vscode-augment-0.771.0/out/extension.js:593:38739
-	at async forwardToGoogleStream (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.5/out/extension.js:3829:26)
-	at async IncomingMessage.<anonymous> (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.5/out/extension.js:1438:21)
+[2026-02-07T08:32:03.163Z] GET /health
+[2026-02-07T08:32:03.439Z] POST /record-session-events
+[2026-02-07T08:32:08.172Z] GET /health
+[2026-02-07T08:32:08.736Z] POST /record-session-events
+[2026-02-07T08:32:13.177Z] GET /health
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
 [QUEUE] Request completed for conversation 291a6595
-[2026-02-07T08:26:56.934Z] POST /record-session-events
-[2026-02-07T08:26:57.111Z] GET /health
-[2026-02-07T08:27:02.113Z] GET /health
-[2026-02-07T08:27:02.540Z] POST /notifications
-[2026-02-07T08:27:02.546Z] POST /report-error
-[REPORT-ERROR] unknown
-[2026-02-07T08:27:07.116Z] GET /health
-[2026-02-07T08:27:12.116Z] GET /health
-代理服务器已停止
-=== 代理服务器启动 ===
-Provider: Google Gemini
-端口: 8765
-Base URL: https://generativelanguage.googleapis.com/v1beta/models
-Model: gemini-2.5-flash-preview-09-2025
-[2026-02-07T08:27:32.127Z] GET /health
-[2026-02-07T08:27:32.670Z] POST /chat-stream
-[CHAT-STREAM] message: "继续帮我逆向Augment插件，看一下能不能还原augment的源代码..." history: 0
-[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
-[DEBUG] nodes count: 2
-[DEBUG] node[0]: type=0, keys=id,type,text_node
-[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
-[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
-[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
-[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
-[DEBUG] user_guided_blobs: array[0]
-[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-2.5-flash-preview-09-2025, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[GOOGLE] Final message sequence: user
-[GOOGLE] Sending to Gemini API with 1 messages
-[GOOGLE] System prompt length: 3859 chars
-[GOOGLE] ✓ Gemini-specific behavior guidelines included
-[GOOGLE] Added 61 tool definitions
-[2026-02-07T08:27:36.949Z] POST /record-session-events
-[2026-02-07T08:27:37.131Z] GET /health
-[2026-02-07T08:27:38.467Z] POST /chat-stream
+[2026-02-07T08:32:13.930Z] POST /chat-stream
 [CHAT-STREAM] message: "###
 # ENTER MESSAGE ANALYSIS MODE
-# IN THIS MODE Y..." history: 0
-[QUEUE] Waiting for pending request on conversation 291a6595...
-[GOOGLE] Tool call: view
-[GOOGLE] Stream complete, stop_reason=3
-[QUEUE] Request completed for conversation 291a6595
-[QUEUE] Previous request completed, proceeding...
+# IN THIS MODE Y..." history: 1
 [DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
 [DEBUG] nodes count: 2
 [DEBUG] node[0]: type=0, keys=id,type,text_node
 [DEBUG] node[1]: type=4, keys=id,type,ide_state_node
 [DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
 [WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
-[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
-[DEBUG] user_guided_blobs: array[0]
-[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-2.5-flash-preview-09-2025, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[GOOGLE] Final message sequence: user
-[GOOGLE] Sending to Gemini API with 1 messages
-[GOOGLE] System prompt length: 3859 chars
-[GOOGLE] ✓ Gemini-specific behavior guidelines included
-[GOOGLE] Added 61 tool definitions
-[2026-02-07T08:27:41.527Z] POST /chat-stream
-[CHAT-STREAM] message: "..." history: 1
-[QUEUE] Waiting for pending request on conversation 291a6595...
-[2026-02-07T08:27:42.133Z] GET /health
-[2026-02-07T08:27:42.535Z] POST /record-session-events
-[2026-02-07T08:27:42.564Z] POST /record-request-events
-[GOOGLE] Stream complete, stop_reason=1
-[QUEUE] Request completed for conversation 291a6595
-[QUEUE] Previous request completed, proceeding...
-[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
-[DEBUG] nodes count: 2
-[DEBUG] node[0]: type=1, keys=type,tool_result_node
-[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770452861464_3dr6zqkwm, content_len=848
-[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
-[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
-[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
 [DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452861464_3dr6zqkwm","tool_name":"view","input_json":"{\"path\":\".\"}"}
-[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=false, has thoughtSignature=false
-[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
-[DEBUG] user_guided_blobs: array[0]
-[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-2.5-flash-preview-09-2025, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[CONTEXT] 📊 统计: 1 次交互, ~4 tokens (0.0%)
-[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
-[GOOGLE] Final message sequence: user → model → user
-[GOOGLE] Sending to Gemini API with 3 messages
-[GOOGLE] System prompt length: 3859 chars
-[GOOGLE] ✓ Gemini-specific behavior guidelines included
-[GOOGLE] Added 61 tool definitions
-[2026-02-07T08:27:47.135Z] GET /health
-[2026-02-07T08:27:48.450Z] POST /record-request-events
-[2026-02-07T08:27:48.454Z] POST /record-request-events
-[GOOGLE] Stream complete, stop_reason=1
-[QUEUE] Request completed for conversation 291a6595
-[2026-02-07T08:27:52.142Z] GET /health
-[2026-02-07T08:27:57.160Z] GET /health
-[2026-02-07T08:28:02.158Z] GET /health
-[2026-02-07T08:28:02.541Z] POST /notifications
-[2026-02-07T08:28:02.545Z] POST /report-error
-[REPORT-ERROR] unknown
-代理服务器已停止
-=== 代理服务器启动 ===
-Provider: Google Gemini
-端口: 8765
-Base URL: https://generativelanguage.googleapis.com/v1beta/models
-Model: gemini-3-flash-preview
-[2026-02-07T08:28:06.955Z] POST /record-session-events
-[2026-02-07T08:28:07.150Z] GET /health
-[2026-02-07T08:28:07.892Z] POST /chat-stream
-[CHAT-STREAM] message: "继续帮我逆向Augment插件，看一下能不能还原augment的源代码..." history: 0
-[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
-[DEBUG] nodes count: 2
-[DEBUG] node[0]: type=0, keys=id,type,text_node
-[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
-[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
-[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
-[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
-[DEBUG] user_guided_blobs: array[0]
-[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-3-flash-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[GOOGLE] Final message sequence: user
-[GOOGLE] Sending to Gemini API with 1 messages
-[GOOGLE] System prompt length: 3859 chars
-[GOOGLE] ✓ Gemini-specific behavior guidelines included
-[GOOGLE] Added 61 tool definitions
-[GOOGLE] Tool call: view
-[GOOGLE] Stream complete, stop_reason=3
-[QUEUE] Request completed for conversation 291a6595
-[2026-02-07T08:28:11.669Z] POST /chat-stream
-[CHAT-STREAM] message: "..." history: 1
-[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
-[DEBUG] nodes count: 2
-[DEBUG] node[0]: type=1, keys=type,tool_result_node
-[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770452891487_dbyxfm9d6, content_len=848
-[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
-[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
-[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
-[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452891487_dbyxfm9d6","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErgJCrUJAb4+9vuoVri2u5+VIU+cop+XbjZDNBuY3n1pYy2lb7RTH9KNghYEw/SAzMMPVup/B2gixK5d+X7K/NOT8GnvteKNAyTNJlST+5CNWfwKDBSDv9w50Qw9pP16c8FZ4B7tYgjLj4Qx5+9d/6XJ0a7W+NEMfAUPdl7AB3Scl9AHWLbk
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
 [DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
 [DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
 [DEBUG] user_guided_blobs: array[0]
 [DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-3-flash-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
 [CONTEXT] 📊 统计: 1 次交互, ~4 tokens (0.0%)
 [GOOGLE] Exchange 0 user: [placeholder for missing request_message]
 [GOOGLE] Final message sequence: user → model → user
@@ -199,82 +79,703 @@ Model: gemini-3-flash-preview
 [GOOGLE] System prompt length: 3859 chars
 [GOOGLE] ✓ Gemini-specific behavior guidelines included
 [GOOGLE] Added 61 tool definitions
-[2026-02-07T08:28:12.163Z] GET /health
-[2026-02-07T08:28:12.570Z] POST /record-request-events
-[GOOGLE] Tool call: view
-[GOOGLE] Stream complete, stop_reason=3
+[2026-02-07T08:32:14.039Z] POST /chat-stream
+[CHAT-STREAM] message: "..." history: 1
+[QUEUE] Waiting for pending request on conversation 291a6595...
+[GOOGLE] Stream complete, stop_reason=1, text_length=232
 [QUEUE] Request completed for conversation 291a6595
-[2026-02-07T08:28:14.754Z] POST /chat-stream
+[QUEUE] Previous request completed, proceeding...
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 2
+[DEBUG] node[0]: type=1, keys=type,tool_result_node
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453133873_bl4ivesgr, content_len=904
+[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
+[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
+[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 1 次交互, ~4 tokens (0.0%)
+[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
+[GOOGLE] Final message sequence: user → model → user
+[GOOGLE] Sending to Gemini API with 3 messages
+[GOOGLE] System prompt length: 3859 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[2026-02-07T08:32:18.178Z] GET /health
+[2026-02-07T08:32:18.686Z] POST /record-session-events
+[2026-02-07T08:32:18.745Z] POST /record-request-events
+[2026-02-07T08:32:23.182Z] GET /health
+[2026-02-07T08:32:23.883Z] POST /record-request-events
+[GOOGLE] Tool call: view
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:32:26.373Z] POST /chat-stream
 [CHAT-STREAM] message: "..." history: 2
 [DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
-[DEBUG] nodes count: 2
+[DEBUG] nodes count: 3
 [DEBUG] node[0]: type=1, keys=type,tool_result_node
-[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770452894608_1hpuvdsmg, content_len=9466
-[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
-[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
-[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453145927_89l223306, content_len=432
+[DEBUG] node[1]: type=1, keys=type,tool_result_node
+[DEBUG] node[1] TOOL_RESULT: tool_use_id=gemini_1770453146006_arbfacjqy, content_len=19941
+[DEBUG] node[2]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[2] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
 [DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452891487_dbyxfm9d6","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErgJCrUJAb4+9vuoVri2u5+VIU+cop+XbjZDNBuY3n1pYy2lb7RTH9KNghYEw/SAzMMPVup/B2gixK5d+X7K/NOT8GnvteKNAyTNJlST+5CNWfwKDBSDv9w50Qw9pP16c8FZ4B7tYgjLj4Qx5+9d/6XJ0a7W+NEMfAUPdl7AB3Scl9AHWLbk
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
 [DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
-[DEBUG] chat_history[1]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452894608_1hpuvdsmg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/package.json\"}","thought_signature":"Ev8ICvwIAb4+9vsOYvoGK3RodvD/OdNTc926SWMdiKu2X9laRT6k4ZfBLe2AOePxs9EyCnCsRtHVN4YAoSNDKbF9hdkj6VRwd4ew8LEiLzmxkeZD892Hqvl/hOYz3mAP1bR95xcLNmAv8oDFy/9+
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
 [DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
 [DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
 [DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
 [DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
 [DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-3-flash-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[CONTEXT] 📊 统计: 2 次交互, ~233 tokens (0.0%)
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 2 次交互, ~261 tokens (0.0%)
 [GOOGLE] Exchange 0 user: [placeholder for missing request_message]
 [GOOGLE] Final message sequence: user → model → model → user
 [GOOGLE] Sending to Gemini API with 4 messages
-[GOOGLE] System prompt length: 3859 chars
+[GOOGLE] System prompt length: 3911 chars
 [GOOGLE] ✓ Gemini-specific behavior guidelines included
 [GOOGLE] Added 61 tool definitions
-[2026-02-07T08:28:15.241Z] POST /remote-agents/list-stream
-[2026-02-07T08:28:17.161Z] GET /health
+[2026-02-07T08:32:28.186Z] GET /health
+[2026-02-07T08:32:28.749Z] POST /record-request-events
+[2026-02-07T08:32:33.192Z] GET /health
+[2026-02-07T08:32:33.885Z] POST /record-request-events
 [GOOGLE] Tool call: view
-[GOOGLE] Stream complete, stop_reason=3
+[GOOGLE] Tool call: browser_run_code_Playwright
+[GOOGLE] Tool call: launch-process
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
 [QUEUE] Request completed for conversation 291a6595
-[2026-02-07T08:28:17.651Z] POST /chat-stream
+[2026-02-07T08:32:38.292Z] GET /health
+[2026-02-07T08:32:38.894Z] POST /client-metrics
+[2026-02-07T08:32:38.909Z] POST /record-request-events
+[2026-02-07T08:32:40.235Z] POST /chat-stream
 [CHAT-STREAM] message: "..." history: 3
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 4
+[DEBUG] node[0]: type=1, keys=type,tool_result_node
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453155726_wojk374tg, content_len=58966
+[DEBUG] node[1]: type=1, keys=type,tool_result_node
+[DEBUG] node[1] TOOL_RESULT: tool_use_id=gemini_1770453155901_efmbnf5h6, content_len=40
+[DEBUG] node[2]: type=1, keys=type,tool_result_node
+[DEBUG] node[2] TOOL_RESULT: tool_use_id=gemini_1770453156179_n9chtgngn, content_len=243
+[DEBUG] node[3]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[3] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
+[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
+[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
+[DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
+[DEBUG] chat_history[2]: response_nodes=3, request_nodes=3, has_request_message=false
+[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155726_wojk374tg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"ErEWCq4WAb4+9vvrpI7BNhhmAcozPIx6s7STR6Ba+N1o/+7eZtMbc9Q8jNS03MrsPYn4ecBYNzb+PYqdUe2f/EOk/aFPeW2nWuJ29QXCnLLnMyYK2yp7zEWpNpYKDnnwQsjTBpGpAbOze1S6
+[DEBUG] chat_history[2].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155901_efmbnf5h6","tool_name":"browser_run_code_Playwright","input_json":"{\"code\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\"}"}
+[DEBUG] chat_history[2].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453156179_n9chtgngn","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\",\"wait\":true}"}
+[DEBUG] chat_history[2].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[2].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/extension.js:\n     1\t\"use strict\";var Ven=Object.create;var Lte=Object.defineProperty;var Pen=Object.getOwnPropertyDescriptor;
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 3 次交互, ~5420 tokens (0.5%)
+[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
+[GOOGLE] Final message sequence: user → model → model → model → user
+[GOOGLE] Sending to Gemini API with 5 messages
+[GOOGLE] System prompt length: 3911 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[2026-02-07T08:32:43.294Z] GET /health
+[2026-02-07T08:32:43.892Z] POST /record-request-events
+[2026-02-07T08:32:48.299Z] GET /health
+[2026-02-07T08:32:48.691Z] POST /notifications
+[2026-02-07T08:32:48.694Z] POST /record-session-events
+[2026-02-07T08:32:48.698Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:32:48.893Z] POST /record-request-events
+[2026-02-07T08:32:53.302Z] GET /health
+[2026-02-07T08:32:58.301Z] GET /health
+[GOOGLE] Tool call: view
+[GOOGLE] Tool call: launch-process
+[2026-02-07T08:32:58.696Z] POST /record-session-events
+[GOOGLE] Tool call: launch-process
+[2026-02-07T08:32:58.893Z] POST /record-request-events
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:32:59.289Z] POST /chat-stream
+[CHAT-STREAM] message: "..." history: 4
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 5
+[DEBUG] node[0]: type=1, keys=type,tool_result_node
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453178386_avacx6hqb, content_len=432
+[DEBUG] node[1]: type=1, keys=type,tool_result_node
+[DEBUG] node[1] TOOL_RESULT: tool_use_id=gemini_1770453178519_eia1iw6wk, content_len=243
+[DEBUG] node[2]: type=1, keys=type,tool_result_node
+[DEBUG] node[2] TOOL_RESULT: tool_use_id=gemini_1770453178878_zjjtjcwqg, content_len=505
+[DEBUG] node[3]: type=1, keys=type,tool_result_node
+[DEBUG] node[3] TOOL_RESULT: tool_use_id=gemini_1770453178960_12imva74j, content_len=53
+[DEBUG] node[4]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[4] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
+[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
+[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
+[DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
+[DEBUG] chat_history[2]: response_nodes=3, request_nodes=3, has_request_message=false
+[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155726_wojk374tg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"ErEWCq4WAb4+9vvrpI7BNhhmAcozPIx6s7STR6Ba+N1o/+7eZtMbc9Q8jNS03MrsPYn4ecBYNzb+PYqdUe2f/EOk/aFPeW2nWuJ29QXCnLLnMyYK2yp7zEWpNpYKDnnwQsjTBpGpAbOze1S6
+[DEBUG] chat_history[2].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155901_efmbnf5h6","tool_name":"browser_run_code_Playwright","input_json":"{\"code\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\"}"}
+[DEBUG] chat_history[2].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453156179_n9chtgngn","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\",\"wait\":true}"}
+[DEBUG] chat_history[2].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[2].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/extension.js:\n     1\t\"use strict\";var Ven=Object.create;var Lte=Object.defineProperty;var Pen=Object.getOwnPropertyDescriptor;
+[DEBUG] chat_history[3]: response_nodes=4, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[3].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178386_avacx6hqb","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"Eo0yCooyAb4+9vvKDKj59KWd9qX0+NHX3y13myWh41yx9OqOpWKmWUbBz0EjU6VBWzRMQMIpvcgVqKHU7x24nWVo/HwFnYg5zjeLkmUOF7kfLpWUc7uMINRF+Gy7kWbrNpeTzm/hgF0suimjZTkx491+0Vv5a
+[DEBUG] chat_history[3].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178519_eia1iw6wk","tool_name":"launch-process","input_json":"{\"wait\":true,\"command\":\"grep -o \\\"injectPlugin\\\" augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178878_zjjtjcwqg","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"apply\\\" augment-analysis/extension.js | head -n 20\",\"wait\":true}"}
+[DEBUG] chat_history[3].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[3]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178960_12imva74j","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/injection.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[3]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] chat_history[3].request_nodes[1]: TOOL_RESULT, tool_result={"content":"### Error\nSyntaxError: Unexpected string","is_error":true,"request_id":"573bd56f-b315-453c-835f-f229b2c9e951","tool_use_id":"gemini_1770453155901_efmbnf5h6"}
+[DEBUG] chat_history[3].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 19488\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 4 次交互, ~20892 tokens (2.0%)
+[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
+[GOOGLE] Final message sequence: user → model → model → model → model → user
+[GOOGLE] Sending to Gemini API with 6 messages
+[GOOGLE] System prompt length: 3911 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[2026-02-07T08:33:03.303Z] GET /health
+[2026-02-07T08:33:03.897Z] POST /record-request-events
+[GOOGLE] Tool call: view
+[GOOGLE] Tool call: view
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:33:07.988Z] POST /chat-stream
+[CHAT-STREAM] message: "..." history: 5
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 4
+[DEBUG] node[0]: type=1, keys=type,tool_result_node
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453187163_hnx4x5lno, content_len=2194
+[DEBUG] node[1]: type=1, keys=type,tool_result_node
+[DEBUG] node[1] TOOL_RESULT: tool_use_id=gemini_1770453187547_g1p6c49qw, content_len=9466
+[DEBUG] node[2]: type=1, keys=type,tool_result_node
+[DEBUG] node[2] TOOL_RESULT: tool_use_id=gemini_1770453187547_kp8ul1h44, content_len=58966
+[DEBUG] node[3]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[3] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
+[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
+[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
+[DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
+[DEBUG] chat_history[2]: response_nodes=3, request_nodes=3, has_request_message=false
+[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155726_wojk374tg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"ErEWCq4WAb4+9vvrpI7BNhhmAcozPIx6s7STR6Ba+N1o/+7eZtMbc9Q8jNS03MrsPYn4ecBYNzb+PYqdUe2f/EOk/aFPeW2nWuJ29QXCnLLnMyYK2yp7zEWpNpYKDnnwQsjTBpGpAbOze1S6
+[DEBUG] chat_history[2].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155901_efmbnf5h6","tool_name":"browser_run_code_Playwright","input_json":"{\"code\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\"}"}
+[DEBUG] chat_history[2].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453156179_n9chtgngn","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\",\"wait\":true}"}
+[DEBUG] chat_history[2].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[2].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/extension.js:\n     1\t\"use strict\";var Ven=Object.create;var Lte=Object.defineProperty;var Pen=Object.getOwnPropertyDescriptor;
+[DEBUG] chat_history[3]: response_nodes=4, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[3].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178386_avacx6hqb","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"Eo0yCooyAb4+9vvKDKj59KWd9qX0+NHX3y13myWh41yx9OqOpWKmWUbBz0EjU6VBWzRMQMIpvcgVqKHU7x24nWVo/HwFnYg5zjeLkmUOF7kfLpWUc7uMINRF+Gy7kWbrNpeTzm/hgF0suimjZTkx491+0Vv5a
+[DEBUG] chat_history[3].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178519_eia1iw6wk","tool_name":"launch-process","input_json":"{\"wait\":true,\"command\":\"grep -o \\\"injectPlugin\\\" augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178878_zjjtjcwqg","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"apply\\\" augment-analysis/extension.js | head -n 20\",\"wait\":true}"}
+[DEBUG] chat_history[3].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[3]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178960_12imva74j","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/injection.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[3]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] chat_history[3].request_nodes[1]: TOOL_RESULT, tool_result={"content":"### Error\nSyntaxError: Unexpected string","is_error":true,"request_id":"573bd56f-b315-453c-835f-f229b2c9e951","tool_use_id":"gemini_1770453155901_efmbnf5h6"}
+[DEBUG] chat_history[3].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 19488\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4]: response_nodes=3, request_nodes=5, has_request_message=false
+[DEBUG] chat_history[4].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187163_hnx4x5lno","tool_name":"view","input_json":"{\"path\":\"augment-analysis/analyze.py\"}","thought_signature":"EtcTCtQTAb4+9vvbdRVOoGaCDWN8KKuQ02v5i8ty+dNc7PBYctxypjoQxf4+sfJZZqL+he/XcXJMLGsJQzJ3MOneHZWlfdRfMKxsW+FMzxYVLg3GKlOX2YZk8K6P3LIZqX6ARDeekmXe5YAABPtd3SPmaI
+[DEBUG] chat_history[4].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_g1p6c49qw","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/package.json\"}"}
+[DEBUG] chat_history[4].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_kp8ul1h44","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[4].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[4].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 27563\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Cannot launch a new waiting process while another waiting process is running. The id of the running process is 27563.\nPlease wait until this process is complete (you can use read-process 
+[DEBUG] chat_history[4].request_nodes[3]: TOOL_RESULT, tool_result={"content":"File not found: augment-proxy-vscode/src/injection.ts","is_error":true,"tool_use_id":"gemini_1770453178960_12imva74j"}
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 5 次交互, ~21238 tokens (2.0%)
+[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
+[GOOGLE] Final message sequence: user → model → model → model → model → model → user
+[GOOGLE] Sending to Gemini API with 7 messages
+[GOOGLE] System prompt length: 3911 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[2026-02-07T08:33:08.325Z] GET /health
+[2026-02-07T08:33:08.699Z] POST /record-session-events
+[2026-02-07T08:33:08.894Z] POST /client-metrics
+[2026-02-07T08:33:08.902Z] POST /record-request-events
+[2026-02-07T08:33:08.910Z] POST /record-request-events
+[2026-02-07T08:33:13.310Z] GET /health
+[2026-02-07T08:33:13.902Z] POST /record-request-events
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:33:18.166Z] POST /chat-stream
+[CHAT-STREAM] message: "..." history: 6
 [DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
 [DEBUG] nodes count: 2
 [DEBUG] node[0]: type=1, keys=type,tool_result_node
-[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770452897545_68bdwstfx, content_len=432
+[DEBUG] node[0] TOOL_RESULT: tool_use_id=gemini_1770453198032_649t4cevg, content_len=57377
+[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
+[DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
+[DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
+[DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
+[DEBUG] chat_history[2]: response_nodes=3, request_nodes=3, has_request_message=false
+[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155726_wojk374tg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"ErEWCq4WAb4+9vvrpI7BNhhmAcozPIx6s7STR6Ba+N1o/+7eZtMbc9Q8jNS03MrsPYn4ecBYNzb+PYqdUe2f/EOk/aFPeW2nWuJ29QXCnLLnMyYK2yp7zEWpNpYKDnnwQsjTBpGpAbOze1S6
+[DEBUG] chat_history[2].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155901_efmbnf5h6","tool_name":"browser_run_code_Playwright","input_json":"{\"code\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\"}"}
+[DEBUG] chat_history[2].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453156179_n9chtgngn","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\",\"wait\":true}"}
+[DEBUG] chat_history[2].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[2].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/extension.js:\n     1\t\"use strict\";var Ven=Object.create;var Lte=Object.defineProperty;var Pen=Object.getOwnPropertyDescriptor;
+[DEBUG] chat_history[3]: response_nodes=4, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[3].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178386_avacx6hqb","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"Eo0yCooyAb4+9vvKDKj59KWd9qX0+NHX3y13myWh41yx9OqOpWKmWUbBz0EjU6VBWzRMQMIpvcgVqKHU7x24nWVo/HwFnYg5zjeLkmUOF7kfLpWUc7uMINRF+Gy7kWbrNpeTzm/hgF0suimjZTkx491+0Vv5a
+[DEBUG] chat_history[3].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178519_eia1iw6wk","tool_name":"launch-process","input_json":"{\"wait\":true,\"command\":\"grep -o \\\"injectPlugin\\\" augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178878_zjjtjcwqg","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"apply\\\" augment-analysis/extension.js | head -n 20\",\"wait\":true}"}
+[DEBUG] chat_history[3].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[3]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178960_12imva74j","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/injection.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[3]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] chat_history[3].request_nodes[1]: TOOL_RESULT, tool_result={"content":"### Error\nSyntaxError: Unexpected string","is_error":true,"request_id":"573bd56f-b315-453c-835f-f229b2c9e951","tool_use_id":"gemini_1770453155901_efmbnf5h6"}
+[DEBUG] chat_history[3].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 19488\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4]: response_nodes=3, request_nodes=5, has_request_message=false
+[DEBUG] chat_history[4].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187163_hnx4x5lno","tool_name":"view","input_json":"{\"path\":\"augment-analysis/analyze.py\"}","thought_signature":"EtcTCtQTAb4+9vvbdRVOoGaCDWN8KKuQ02v5i8ty+dNc7PBYctxypjoQxf4+sfJZZqL+he/XcXJMLGsJQzJ3MOneHZWlfdRfMKxsW+FMzxYVLg3GKlOX2YZk8K6P3LIZqX6ARDeekmXe5YAABPtd3SPmaI
+[DEBUG] chat_history[4].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_g1p6c49qw","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/package.json\"}"}
+[DEBUG] chat_history[4].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_kp8ul1h44","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[4].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[4].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 27563\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Cannot launch a new waiting process while another waiting process is running. The id of the running process is 27563.\nPlease wait until this process is complete (you can use read-process 
+[DEBUG] chat_history[4].request_nodes[3]: TOOL_RESULT, tool_result={"content":"File not found: augment-proxy-vscode/src/injection.ts","is_error":true,"tool_use_id":"gemini_1770453178960_12imva74j"}
+[DEBUG] chat_history[5]: response_nodes=1, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[5].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453198032_649t4cevg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\",\"view_range\":[1253,-1]}","thought_signature":"EqgbCqUbAb4+9vuyWGriUQK0pf0PHww+YpBtuRH8zrGCb6LasksqE56ICfTdy8QsFXz5Mtrtfkzgh+A5h8NndC4D0ugWWn/g46CPcUTYua28H1WBFlQhYk+
+[DEBUG] chat_history[5].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[5].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/analyze.py:\n     1\t#!/usr/bin/env python3\n     2\t\"\"\"Augment Extension Analyzer\"\"\"\n     3\timport re\n     4\tfrom pathl
+[DEBUG] chat_history[5].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/package.json:\n     1\t{\n     2\t  \"name\": \"augment-proxy-manager\",\n     3\t  \"displayName\": \"Augment Proxy Manager\"
+[DEBUG] chat_history[5].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 6 次交互, ~39605 tokens (3.8%)
+[GOOGLE] Exchange 0 user: [placeholder for missing request_message]
+[GOOGLE] Final message sequence: user → model → model → model → model → model → model → user
+[GOOGLE] Sending to Gemini API with 8 messages
+[GOOGLE] System prompt length: 3911 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[2026-02-07T08:33:18.326Z] GET /health
+[2026-02-07T08:33:18.898Z] POST /record-request-events
+[2026-02-07T08:33:23.316Z] GET /health
+[2026-02-07T08:33:23.909Z] POST /record-request-events
+[GOOGLE] Tool call: view
+[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation
+[GOOGLE] Stream complete, stop_reason=3, text_length=0
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:33:25.838Z] POST /chat-stream
+[CHAT-STREAM] message: "Your task is to create a detailed summary of the c..." history: 8
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 2
+[DEBUG] node[0]: type=0, keys=id,type,text_node
 [DEBUG] node[1]: type=4, keys=id,type,ide_state_node
 [DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
 [WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=N/A
 [DEBUG] chat_history[0]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452891487_dbyxfm9d6","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErgJCrUJAb4+9vuoVri2u5+VIU+cop+XbjZDNBuY3n1pYy2lb7RTH9KNghYEw/SAzMMPVup/B2gixK5d+X7K/NOT8GnvteKNAyTNJlST+5CNWfwKDBSDv9w50Qw9pP16c8FZ4B7tYgjLj4Qx5+9d/6XJ0a7W+NEMfAUPdl7AB3Scl9AHWLbk
+[DEBUG] chat_history[0].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453133873_bl4ivesgr","tool_name":"view","input_json":"{\"path\":\".\"}","thought_signature":"ErcnCrQnAb4+9vtsU3mGtzmLB/TOc4RX9rI9POdOePJl5mkSPx0PfxtmGAwXDsw59AWQJ10PQf57ArbV9Pv0ERMFoDV8jx7hQHRDPPWHifb1eTsAiuvltbQgaEHtI8ysLzSRr6m6SITAXw7x9q2iruKE+gfhmxq/XtM+18UNG62+6/ij1wJ9
 [DEBUG] chat_history[0].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
-[DEBUG] chat_history[1]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452894608_1hpuvdsmg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/package.json\"}","thought_signature":"Ev8ICvwIAb4+9vsOYvoGK3RodvD/OdNTc926SWMdiKu2X9laRT6k4ZfBLe2AOePxs9EyCnCsRtHVN4YAoSNDKbF9hdkj6VRwd4ew8LEiLzmxkeZD892Hqvl/hOYz3mAP1bR95xcLNmAv8oDFy/9+
+[DEBUG] chat_history[1]: response_nodes=2, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[1].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453145927_89l223306","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EsUWCsIWAb4+9vurxLjdi33xJLyi6pcy667M4wq499RYddjtaNrKb3qirbq/ZozNtbzkxzVhpgb/X79Dnh0yJJLx6iC2j2dvpjdB+saMbs6MJaQox2w64EXzqFC7hxsAqxyjAa5oSKKlH7fVjKd/B6aGKqoCm
 [DEBUG] chat_history[1].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[1].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453146006_arbfacjqy","tool_name":"view","input_json":"{\"path\":\"augment-analysis/extension.js\",\"view_range\":[1,20]}"}
+[DEBUG] chat_history[1].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
 [DEBUG] chat_history[1].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in ., excluding hidden items:\n./augment-analysis\n./augment-proxy-vscode\n./augment-analysis/API-Reference.txt\n./augment-analysis/ana
-[DEBUG] chat_history[2]: response_nodes=1, request_nodes=2, has_request_message=false
-[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770452897545_68bdwstfx","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"EvwICvkIAb4+9vvcyGQcuUMsadgp9QQcPQFKdFeCzHy22dvRY6Ng4/y4+pkQ3MQ1ff0t+6dI4wgOimNq/yEEO0c9XlV4CZUa+mljAIARbrOiwIhv39KdHA2n6hcS+dGvmj4vIlev2PcY9Um+hja3CdbPW4f5p
+[DEBUG] chat_history[2]: response_nodes=3, request_nodes=3, has_request_message=false
+[DEBUG] chat_history[2].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155726_wojk374tg","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"ErEWCq4WAb4+9vvrpI7BNhhmAcozPIx6s7STR6Ba+N1o/+7eZtMbc9Q8jNS03MrsPYn4ecBYNzb+PYqdUe2f/EOk/aFPeW2nWuJ29QXCnLLnMyYK2yp7zEWpNpYKDnnwQsjTBpGpAbOze1S6
 [DEBUG] chat_history[2].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
-[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/package.json:\n     1\t{\n     2\t  \"name\": \"augment-proxy-manager\",\n     3\t  \"displayName\": \"Augment Proxy Manager\"
+[DEBUG] chat_history[2].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453155901_efmbnf5h6","tool_name":"browser_run_code_Playwright","input_json":"{\"code\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\"}"}
+[DEBUG] chat_history[2].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453156179_n9chtgngn","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"activate\\\" augment-analysis/extension.js | head -n 5\",\"wait\":true}"}
+[DEBUG] chat_history[2].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[2].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[2].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/extension.js:\n     1\t\"use strict\";var Ven=Object.create;var Lte=Object.defineProperty;var Pen=Object.getOwnPropertyDescriptor;
+[DEBUG] chat_history[3]: response_nodes=4, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[3].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178386_avacx6hqb","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src\"}","thought_signature":"Eo0yCooyAb4+9vvKDKj59KWd9qX0+NHX3y13myWh41yx9OqOpWKmWUbBz0EjU6VBWzRMQMIpvcgVqKHU7x24nWVo/HwFnYg5zjeLkmUOF7kfLpWUc7uMINRF+Gy7kWbrNpeTzm/hgF0suimjZTkx491+0Vv5a
+[DEBUG] chat_history[3].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178519_eia1iw6wk","tool_name":"launch-process","input_json":"{\"wait\":true,\"command\":\"grep -o \\\"injectPlugin\\\" augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178878_zjjtjcwqg","tool_name":"launch-process","input_json":"{\"command\":\"grep -n \\\"apply\\\" augment-analysis/extension.js | head -n 20\",\"wait\":true}"}
+[DEBUG] chat_history[3].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].response_nodes[3]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453178960_12imva74j","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/injection.ts\"}"}
+[DEBUG] chat_history[3].response_nodes[3]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[3].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] chat_history[3].request_nodes[1]: TOOL_RESULT, tool_result={"content":"### Error\nSyntaxError: Unexpected string","is_error":true,"request_id":"573bd56f-b315-453c-835f-f229b2c9e951","tool_use_id":"gemini_1770453155901_efmbnf5h6"}
+[DEBUG] chat_history[3].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 19488\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4]: response_nodes=3, request_nodes=5, has_request_message=false
+[DEBUG] chat_history[4].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187163_hnx4x5lno","tool_name":"view","input_json":"{\"path\":\"augment-analysis/analyze.py\"}","thought_signature":"EtcTCtQTAb4+9vvbdRVOoGaCDWN8KKuQ02v5i8ty+dNc7PBYctxypjoQxf4+sfJZZqL+he/XcXJMLGsJQzJ3MOneHZWlfdRfMKxsW+FMzxYVLg3GKlOX2YZk8K6P3LIZqX6ARDeekmXe5YAABPtd3SPmaI
+[DEBUG] chat_history[4].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[1]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_g1p6c49qw","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/package.json\"}"}
+[DEBUG] chat_history[4].response_nodes[1]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].response_nodes[2]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453187547_kp8ul1h44","tool_name":"view","input_json":"{\"path\":\"augment-proxy-vscode/src/extension.ts\"}"}
+[DEBUG] chat_history[4].response_nodes[2]: has thought_signature=false, has thoughtSignature=false
+[DEBUG] chat_history[4].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the files and directories up to 2 levels deep in augment-proxy-vscode/src, excluding hidden items:\naugment-proxy-vscode/src/context-manager.ts\naugment-proxy-vscode/src/extension.t
+[DEBUG] chat_history[4].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Command may still be running. You can use read-process to get more output\nand kill-process to terminate it if needed.\nTerminal ID 27563\nOutput so far:\n<output>\n\n</output>\nThe termin
+[DEBUG] chat_history[4].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Cannot launch a new waiting process while another waiting process is running. The id of the running process is 27563.\nPlease wait until this process is complete (you can use read-process 
+[DEBUG] chat_history[4].request_nodes[3]: TOOL_RESULT, tool_result={"content":"File not found: augment-proxy-vscode/src/injection.ts","is_error":true,"tool_use_id":"gemini_1770453178960_12imva74j"}
+[DEBUG] chat_history[5]: response_nodes=0, request_nodes=4, has_request_message=false
+[DEBUG] chat_history[5].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-analysis/analyze.py:\n     1\t#!/usr/bin/env python3\n     2\t\"\"\"Augment Extension Analyzer\"\"\"\n     3\timport re\n     4\tfrom pathl
+[DEBUG] chat_history[5].request_nodes[1]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/package.json:\n     1\t{\n     2\t  \"name\": \"augment-proxy-manager\",\n     3\t  \"displayName\": \"Augment Proxy Manager\"
+[DEBUG] chat_history[5].request_nodes[2]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n     1\t\"use strict\";\n     2\tvar __createBinding = (this && this.__createBinding) || (Object.create ? (
+[DEBUG] chat_history[6]: response_nodes=1, request_nodes=2, has_request_message=false
+[DEBUG] chat_history[6].response_nodes[0]: TOOL_USE, tool_use={"tool_use_id":"gemini_1770453205631_pa963t4yu","tool_name":"view","input_json":"{\"view_range\":[3000,-1],\"path\":\"augment-proxy-vscode/src/extension.ts\"}","thought_signature":"EogRCoURAb4+9vuF4gieeEU4ZSXqB7FxNRpq/W7p/tnGG2Edr6Yq89CXdhWfq+JuhQHKkrZ8/B6Njz1cBR3NvYpYrvXwzYK7FhdAgetouK95LpuhRWQdaSd
+[DEBUG] chat_history[6].response_nodes[0]: has thought_signature=true, has thoughtSignature=false
+[DEBUG] chat_history[6].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n  1253\t                        type: 'base64',\n  1254\t                        media_type: img.mediaType,
+[DEBUG] chat_history[7]: response_nodes=0, request_nodes=1, has_request_message=false
+[DEBUG] chat_history[7].request_nodes[0]: TOOL_RESULT, tool_result={"content":"Here's the result of running `cat -n` on augment-proxy-vscode/src/extension.ts:\n  3000\t        else if (urlStr.includes('/client-completion-timelines')) endpoint = '/client-completion-ti
 [DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
 [DEBUG] user_guided_blobs: array[0]
 [DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
-[CONTEXT] 模型: gemini-3-flash-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
-[CONTEXT] 📊 统计: 3 次交互, ~2716 tokens (0.3%)
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[CONTEXT] 📊 统计: 8 次交互, ~69515 tokens (6.6%)
 [GOOGLE] Exchange 0 user: [placeholder for missing request_message]
-[GOOGLE] Final message sequence: user → model → model → model → user
-[GOOGLE] Sending to Gemini API with 5 messages
+[GOOGLE] Final message sequence: user → model → model → model → model → model → model → user
+[GOOGLE] Sending to Gemini API with 8 messages
 [GOOGLE] System prompt length: 3859 chars
 [GOOGLE] ✓ Gemini-specific behavior guidelines included
 [GOOGLE] Added 61 tool definitions
-[2026-02-07T08:28:18.457Z] POST /record-request-events
-[2026-02-07T08:28:18.460Z] POST /record-request-events
-[2026-02-07T08:28:18.465Z] POST /record-request-events
-[2026-02-07T08:28:22.163Z] GET /health
-[2026-02-07T08:28:22.571Z] POST /record-request-events
-[2026-02-07T08:28:22.577Z] POST /record-request-events
-[2026-02-07T08:28:27.166Z] GET /health
-[2026-02-07T08:28:30.519Z] POST /report-error
+[2026-02-07T08:33:28.315Z] GET /health
+[2026-02-07T08:33:28.900Z] POST /record-request-events
+[2026-02-07T08:33:33.320Z] GET /health
+[2026-02-07T08:33:33.909Z] POST /record-request-events
+[2026-02-07T08:33:38.329Z] GET /health
+[2026-02-07T08:33:41.199Z] POST /next-edit-stream
+[NEXT-EDIT] Found 3 related files for augment-proxy-vscode/src/extension.ts
+[2026-02-07T08:33:43.334Z] GET /health
+[2026-02-07T08:33:48.343Z] GET /health
+[2026-02-07T08:33:48.693Z] POST /notifications
+[2026-02-07T08:33:48.699Z] POST /report-error
 [REPORT-ERROR] unknown
-[2026-02-07T08:28:32.165Z] GET /health
-[2026-02-07T08:28:37.171Z] GET /health
+[GOOGLE] Stream complete, stop_reason=1, text_length=2905
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:33:50.739Z] POST /chat-stream
+[CHAT-STREAM] message: "..." history: 0
+[DEBUG] Request keys: model, path, prefix, selected_code, suffix, message, chat_history, lang, blobs, user_guided_blobs, context_code_exchange_request_id, external_source_ids, disable_auto_external_sources, user_guidelines, workspace_guidelines, feature_detection_flags, tool_definitions, nodes, mode, agent_memories, persona_type, rules, silent, third_party_override, conversation_id, canvas_id
+[DEBUG] nodes count: 2
+[DEBUG] node[0]: type=0, keys=id,type,text_node
+[DEBUG] node[1]: type=4, keys=id,type,ide_state_node
+[DEBUG] node[1] IDE_STATE: {"workspace_folders":[{"folder_root":"/Users/legna/Augment","repository_root":"/Users/legna/Augment"}],"workspace_folders_unchanged":false,"current_terminal":{"terminal_id":0,"current_working_directory":"/Users/legna/Augment"}}
+[WORKSPACE] extracted: workspace=/Users/legna/Augment, repositoryRoot=/Users/legna/Augment, cwd=/Users/legna/Augment, currentFile=augment-proxy-vscode/src/extension.ts
+[DEBUG] blobs: checkpoint_id,added_blobs,deleted_blobs
+[DEBUG] user_guided_blobs: array[0]
+[DEBUG] path: augment-proxy-vscode/src/extension.ts
+[DEBUG] prefix length: 40000
+[DEBUG] suffix length: 40000
+[DEBUG] tool_definitions: [{"name":"browser_close_Playwright","description":"Close the page","input_schema_json":"{\"type\":\"object\",\"properties\":{},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false}","tool_safety":0,"original_mcp_server_name":"Playwright","mcp_server_name":"Playwright","mcp_tool_name":"browser_close"},{"name":"browser_resize_Playwright","description":"Resize the browser window","input_schema_json":"{\"type\":\"object\",\"properties\":{\"width\":{\"type\":\"n
+[CONTEXT] 模型: gemini-3-pro-preview, 上下文限制: 1048576 tokens, 压缩阈值: 80%
+[GOOGLE] Final message sequence: 
+[GOOGLE] Sending to Gemini API with 0 messages
+[GOOGLE] System prompt length: 3911 chars
+[GOOGLE] ✓ Gemini-specific behavior guidelines included
+[GOOGLE] Added 61 tool definitions
+[GOOGLE ERROR] contents are required
+[GOOGLE ERROR] Stack: Error: contents are required
+	at tContents (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/node_modules/@google/genai/dist/node/index.cjs:2775:15)
+	at generateContentParametersToMldev (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/node_modules/@google/genai/dist/node/index.cjs:9236:31)
+	at Models.generateContentStreamInternal (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/node_modules/@google/genai/dist/node/index.cjs:13838:26)
+	at Models.generateContentStream (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/node_modules/@google/genai/dist/node/index.cjs:13350:35)
+	at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+	at async /Users/legna/.vscode/extensions/augment.vscode-augment-0.771.0/out/extension.js:593:38739
+	at async forwardToGoogleStream (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/out/extension.js:3838:26)
+	at async IncomingMessage.<anonymous> (/Users/legna/.vscode/extensions/legna.augment-proxy-manager-1.7.6/out/extension.js:1438:21)
+[QUEUE] Request completed for conversation 291a6595
+[2026-02-07T08:33:53.349Z] GET /health
+[2026-02-07T08:33:53.915Z] POST /record-request-events
+[2026-02-07T08:33:54.362Z] POST /batch-upload
+[2026-02-07T08:33:54.369Z] POST /batch-upload
+[2026-02-07T08:33:55.022Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:33:55.025Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:33:58.029Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:33:58.034Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:33:58.349Z] GET /health
+[2026-02-07T08:34:01.026Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:01.036Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:01.745Z] POST /remote-agents/list-stream
+[2026-02-07T08:34:03.354Z] GET /health
+[2026-02-07T08:34:04.027Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:04.033Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:07.027Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:07.031Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:08.357Z] GET /health
+[2026-02-07T08:34:09.933Z] POST /next-edit-stream
+[NEXT-EDIT] Found 3 related files for augment-proxy-vscode/src/extension.ts
+[2026-02-07T08:34:10.033Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:10.038Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:13.036Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:13.042Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:13.361Z] GET /health
+[2026-02-07T08:34:16.037Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:16.041Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:17.827Z] POST /batch-upload
+[2026-02-07T08:34:18.364Z] GET /health
+[2026-02-07T08:34:19.042Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:19.045Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:22.046Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:22.050Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:23.366Z] GET /health
+[2026-02-07T08:34:25.052Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:25.059Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:28.055Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:28.064Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:28.371Z] GET /health
+[2026-02-07T08:34:31.059Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:31.066Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:33.377Z] GET /health
+[2026-02-07T08:34:34.058Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:34.063Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:37.064Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:37.072Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:38.380Z] GET /health
+[2026-02-07T08:34:40.065Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:40.072Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:43.065Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:43.072Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:43.381Z] GET /health
+[2026-02-07T08:34:46.070Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:46.074Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:48.382Z] GET /health
+[2026-02-07T08:34:48.698Z] POST /notifications
+[2026-02-07T08:34:48.701Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:49.074Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:49.078Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:52.081Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:52.088Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:53.383Z] GET /health
+[2026-02-07T08:34:53.779Z] POST /subscription-banner
+[2026-02-07T08:34:55.086Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:55.090Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:58.091Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:34:58.095Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:34:58.387Z] GET /health
+[2026-02-07T08:35:01.095Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:01.099Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:03.390Z] GET /health
+[2026-02-07T08:35:04.100Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:04.104Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:07.104Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:07.108Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:08.391Z] GET /health
+[2026-02-07T08:35:10.108Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:10.112Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:13.111Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:13.115Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:13.396Z] GET /health
+[2026-02-07T08:35:16.112Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:16.119Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:18.398Z] GET /health
+[2026-02-07T08:35:19.117Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:19.121Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:23.401Z] GET /health
+[2026-02-07T08:35:28.405Z] GET /health
+[2026-02-07T08:35:30.739Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:33.409Z] GET /health
+[2026-02-07T08:35:33.934Z] POST /record-request-events
+[2026-02-07T08:35:38.415Z] GET /health
+[2026-02-07T08:35:43.426Z] GET /health
+[2026-02-07T08:35:48.426Z] GET /health
+[2026-02-07T08:35:48.702Z] POST /notifications
+[2026-02-07T08:35:48.705Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:48.850Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:35:48.858Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:35:53.428Z] GET /health
+[2026-02-07T08:35:58.437Z] GET /health
+[2026-02-07T08:36:03.438Z] GET /health
+[2026-02-07T08:36:08.443Z] GET /health
+[2026-02-07T08:36:13.447Z] GET /health
+[2026-02-07T08:36:18.448Z] GET /health
+[2026-02-07T08:36:23.457Z] GET /health
+[2026-02-07T08:36:28.459Z] GET /health
+[2026-02-07T08:36:33.465Z] GET /health
+[2026-02-07T08:36:38.471Z] GET /health
+[2026-02-07T08:36:43.471Z] GET /health
+[2026-02-07T08:36:44.439Z] POST /get-models
+[GET-MODELS] Returning fake Claude model: claude-opus-4.5 (actual: gemini-3-pro-preview)
+[2026-02-07T08:36:48.469Z] GET /health
+[2026-02-07T08:36:48.704Z] POST /notifications
+[2026-02-07T08:36:48.708Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:36:48.856Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:36:48.864Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:36:48.966Z] POST /record-session-events
+[2026-02-07T08:36:53.476Z] GET /health
+[2026-02-07T08:36:58.477Z] GET /health
+[2026-02-07T08:37:03.483Z] GET /health
+[2026-02-07T08:37:08.489Z] GET /health
+[2026-02-07T08:37:13.492Z] GET /health
+[2026-02-07T08:37:18.493Z] GET /health
+[2026-02-07T08:37:23.497Z] GET /health
+[2026-02-07T08:37:28.503Z] GET /health
+[2026-02-07T08:37:33.506Z] GET /health
+[2026-02-07T08:37:38.512Z] GET /health
+[2026-02-07T08:37:43.517Z] GET /health
+[2026-02-07T08:37:48.512Z] GET /health
+[2026-02-07T08:37:48.707Z] POST /notifications
+[2026-02-07T08:37:48.712Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:37:48.860Z] POST /find-missing
+[FIND-MISSING] blob_names count: 0
+[2026-02-07T08:37:48.865Z] POST /report-error
+[REPORT-ERROR] unknown
+[2026-02-07T08:37:53.513Z] GET /health
+[2026-02-07T08:37:58.517Z] GET /health
+[2026-02-07T08:38:03.523Z] GET /health
+[2026-02-07T08:38:08.525Z] GET /health
+[2026-02-07T08:38:13.530Z] GET /health
+[2026-02-07T08:38:18.534Z] GET /health
+[2026-02-07T08:38:23.537Z] GET /health
+[2026-02-07T08:38:28.543Z] GET /health
+[2026-02-07T08:38:33.545Z] GET /health
+[2026-02-07T08:38:38.547Z] GET /health
+[2026-02-07T08:38:43.550Z] GET /health
