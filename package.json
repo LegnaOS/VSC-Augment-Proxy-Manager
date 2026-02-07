@@ -176,17 +176,14 @@
         "augmentProxy.google.enableContextCompression": {
           "type": "boolean",
           "default": true,
-          "description": "启用智能上下文压缩 (保留最近3次完整交互，压缩更早的历史)"
+          "description": "启用智能上下文压缩 (基于 token 使用率自动压缩)"
         },
-        "augmentProxy.google.contextCompressionThreshold": {
+        "augmentProxy.google.compressionThreshold": {
           "type": "number",
-          "default": 8,
-          "description": "触发上下文压缩的历史长度阈值"
-        },
-        "augmentProxy.google.keepRecentCount": {
-          "type": "number",
-          "default": 3,
-          "description": "保留最近几次完整交互（不压缩）"
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "触发压缩的阈值百分比 (默认 80%，即使用率超过 80% 时触发压缩)"
         },
         "augmentProxy.custom.baseUrl": {
           "type": "string",

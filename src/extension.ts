@@ -3229,6 +3229,11 @@ class AugmentProxySidebarProvider {
             this._view.webview.postMessage({ type: 'embeddingStatus', ...status });
         }
     }
+    updateContextStatus(contextStats) {
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'contextStatus', ...contextStats });
+        }
+    }
     resolveWebviewView(webviewView) {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true };
@@ -3259,6 +3264,11 @@ class AugmentProxySidebarProvider {
                     break;
                 case 'getConfig':
                     this.sendFullStatus();
+                    break;
+                case 'setCompressionThreshold':
+                    await vscode.workspace.getConfiguration('augmentProxy.google')
+                        .update('compressionThreshold', msg.threshold, vscode.ConfigurationTarget.Global);
+                    vscode.window.showInformationMessage(`压缩阈值已设置为 ${msg.threshold}%`);
                     break;
                 case 'fetchModels':
                     await this.fetchModels(msg.provider);
@@ -3296,7 +3306,8 @@ class AugmentProxySidebarProvider {
         const configData = {
             provider,
             port: config.get('port', 8765),
-            providers: {}
+            providers: {},
+            compressionThreshold: 80
         };
         for (const p of PROVIDERS) {
             configData.providers[p] = {
@@ -3307,6 +3318,7 @@ class AugmentProxySidebarProvider {
             };
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
+        configData.compressionThreshold = config.get('google.compressionThreshold', 80);
         this._view.webview.postMessage({
             type: 'fullStatus',
             proxyRunning: !!proxyServer,
@@ -3644,6 +3656,26 @@ button.small { padding: 4px 8px; font-size: 11px; }
     </div>
 
     <div class="section">
+        <div class="title">📊 上下文状态</div>
+        <div class="status" style="font-size: 11px; opacity: 0.8;">
+            <span>Token 使用:</span>
+            <span id="contextTokens" style="margin-left: 4px; color: #4caf50;">0 / 200K (0%)</span>
+        </div>
+        <div class="status" style="font-size: 11px; opacity: 0.8;">
+            <span>交互次数:</span>
+            <span id="contextExchanges" style="margin-left: 4px;">0</span>
+        </div>
+        <div id="contextCompression" style="display:none; font-size: 11px; opacity: 0.8; margin: 4px 0; color: #ff9800;">
+            <span>⚠️ 已压缩</span>
+        </div>
+        <div class="row" style="margin-top: 8px;">
+            <label>压缩阈值 (%)</label>
+            <input type="number" id="compressionThreshold" min="50" max="95" value="80" style="width: 100%;">
+            <div class="info">超过此百分比时自动压缩上下文</div>
+        </div>
+    </div>
+
+    <div class="section">
         <div class="title">插件注入</div>
         <div class="btn-row">
             <button id="injectBtn">注入插件</button>
@@ -3802,6 +3834,30 @@ window.addEventListener('message', e => {
         document.getElementById('injectStatus').textContent = '注入: ' + (msg.injected ? '已注入' : '未注入');
     } else if (msg.type === 'embeddingStatus') {
         updateEmbeddingUI(msg);
+    } else if (msg.type === 'contextStatus') {
+        // 更新上下文状态
+        const tokenLimit = msg.token_limit || 200000;
+        const tokenLimitK = tokenLimit >= 1000000 ? (tokenLimit / 1000000).toFixed(1) + 'M' : (tokenLimit / 1000).toFixed(0) + 'K';
+        const estimatedTokens = msg.estimated_tokens || 0;
+        const usagePercent = msg.usage_percentage || 0;
+        
+        // 根据使用率设置颜色
+        let color = '#4caf50'; // 绿色
+        if (usagePercent > 80) color = '#f44336'; // 红色
+        else if (usagePercent > 60) color = '#ff9800'; // 橙色
+        
+        document.getElementById('contextTokens').textContent = 
+            estimatedTokens + ' / ' + tokenLimitK + ' (' + usagePercent.toFixed(1) + '%)';
+        document.getElementById('contextTokens').style.color = color;
+        document.getElementById('contextExchanges').textContent = msg.total_exchanges || 0;
+        
+        // 显示/隐藏压缩提示
+        const compressionDiv = document.getElementById('contextCompression');
+        if (msg.compressed) {
+            compressionDiv.style.display = 'block';
+        } else {
+            compressionDiv.style.display = 'none';
+        }
     } else if (msg.type === 'modelsList') {
         $refreshModelsBtn.disabled = false;
         if (msg.error) {
@@ -3838,8 +3894,19 @@ window.addEventListener('message', e => {
         if (msg.config.provider === 'custom') $format.value = pConfig.format || 'anthropic';
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);
+        
+        // 加载压缩阈值
+        document.getElementById('compressionThreshold').value = msg.config.compressionThreshold || 80;
     }
 });
+
+// 压缩阈值变化时保存
+document.getElementById('compressionThreshold').onchange = () => {
+    const threshold = parseInt(document.getElementById('compressionThreshold').value);
+    if (threshold >= 50 && threshold <= 95) {
+        vscode.postMessage({command: 'setCompressionThreshold', threshold});
+    }
+};
 
 // 初始化
 vscode.postMessage({command:'getConfig'});
@@ -3864,25 +3931,68 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     
-    // 智能压缩上下文历史
+    // 智能压缩上下文历史（基于 token 使用率）
     const config = vscode.workspace.getConfiguration('augmentProxy.google');
     const enableCompression = config.get('enableContextCompression', true) as boolean;
-    const compressionThreshold = config.get('contextCompressionThreshold', 8) as number;
-    const keepRecentCount = config.get('keepRecentCount', 3) as number;
+    const compressionThresholdPercent = config.get('compressionThreshold', 80) as number;
+    const compressionThreshold = compressionThresholdPercent / 100; // 转换为小数
     
-    if (enableCompression && augmentReq.chat_history && augmentReq.chat_history.length > compressionThreshold) {
-        const { compressChatHistory } = require('./context-manager');
-        const compressionResult = await compressChatHistory(
-            augmentReq.chat_history,
-            keepRecentCount,
-            compressionThreshold
-        );
+    // 动态获取模型的上下文限制
+    const modelName = currentConfig.model || 'gemini-3-pro-preview';
+    const { getModelContextLimit } = require('./context-manager');
+    const tokenLimit = getModelContextLimit(modelName);
+    
+    outputChannel.appendLine(`[CONTEXT] 模型: ${modelName}, 上下文限制: ${tokenLimit} tokens, 压缩阈值: ${compressionThresholdPercent}%`);
+    
+    let contextStats: any = null;
+    let wasCompressed = false;
+    
+    if (enableCompression && augmentReq.chat_history && augmentReq.chat_history.length > 0) {
+        const { compressChatHistoryByTokens, getContextStats } = require('./context-manager');
         
-        if (compressionResult.compressed_count < compressionResult.original_count) {
-            augmentReq.chat_history = compressionResult.compressed_exchanges;
-            outputChannel.appendLine(`[CONTEXT] Compressed history: ${compressionResult.original_count} → ${compressionResult.compressed_count} exchanges`);
-            if (compressionResult.summary) {
-                outputChannel.appendLine(`[CONTEXT] Summary: ${compressionResult.summary.slice(0, 100)}...`);
+        // 获取当前上下文统计
+        contextStats = getContextStats(augmentReq.chat_history, tokenLimit, compressionThreshold);
+        outputChannel.appendLine(`[CONTEXT] 📊 统计: ${contextStats.total_exchanges} 次交互, ~${contextStats.estimated_tokens} tokens (${contextStats.usage_percentage.toFixed(1)}%)`);
+        
+        // 更新侧边栏状态
+        if (sidebarProvider) {
+            sidebarProvider.updateContextStatus({
+                total_exchanges: contextStats.total_exchanges,
+                estimated_tokens: contextStats.estimated_tokens,
+                token_limit: tokenLimit,
+                usage_percentage: contextStats.usage_percentage,
+                compressed: false
+            });
+        }
+        
+        // 如果需要压缩
+        if (contextStats.needs_compression) {
+            const compressionResult = await compressChatHistoryByTokens(
+                augmentReq.chat_history,
+                tokenLimit,
+                0.4, // 目标使用率 40%
+                compressionThreshold
+            );
+            
+            if (compressionResult.compressed_count < compressionResult.original_count) {
+                augmentReq.chat_history = compressionResult.compressed_exchanges;
+                wasCompressed = true;
+                outputChannel.appendLine(`[CONTEXT] ✂️ 压缩: ${compressionResult.original_count} → ${compressionResult.compressed_count} 次交互`);
+                outputChannel.appendLine(`[CONTEXT] 📉 Token: ${compressionResult.estimated_tokens_before} → ${compressionResult.estimated_tokens_after} (${(compressionResult.compression_ratio * 100).toFixed(1)}%)`);
+                if (compressionResult.summary) {
+                    outputChannel.appendLine(`[CONTEXT] 📝 摘要: ${compressionResult.summary.slice(0, 80)}...`);
+                }
+                
+                // 更新压缩后的状态
+                if (sidebarProvider) {
+                    sidebarProvider.updateContextStatus({
+                        total_exchanges: compressionResult.compressed_count,
+                        estimated_tokens: compressionResult.estimated_tokens_after,
+                        token_limit: tokenLimit,
+                        usage_percentage: (compressionResult.estimated_tokens_after / tokenLimit) * 100,
+                        compressed: true
+                    });
+                }
             }
         }
     }

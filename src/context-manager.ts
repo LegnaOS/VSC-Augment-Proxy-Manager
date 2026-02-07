@@ -14,40 +14,239 @@ interface CompressionResult {
     summary?: string;
     original_count: number;
     compressed_count: number;
+    estimated_tokens_before: number;
+    estimated_tokens_after: number;
+    compression_ratio: number;
+}
+
+interface ContextStats {
+    total_exchanges: number;
+    estimated_tokens: number;
+    token_limit: number;
+    usage_percentage: number;
+    needs_compression: boolean;
 }
 
 /**
- * 压缩对话历史
- * @param chatHistory 完整的对话历史
- * @param keepRecentCount 保留最近几次完整交互（默认3次）
- * @param maxHistoryLength 触发压缩的历史长度阈值（默认8次）
- * @returns 压缩后的历史和摘要
+ * 获取模型的上下文限制
  */
-export async function compressChatHistory(
+export function getModelContextLimit(modelName: string): number {
+    const model = modelName.toLowerCase();
+    
+    // Gemini 系列
+    if (model.includes('gemini-3')) {
+        return 1000000; // 1M tokens
+    }
+    if (model.includes('gemini-2.5') || model.includes('gemini-2.0')) {
+        return 1000000; // 1M tokens
+    }
+    if (model.includes('gemini-1.5')) {
+        return 1000000; // 1M tokens
+    }
+    if (model.includes('gemini-exp')) {
+        return 1000000; // 1M tokens
+    }
+    if (model.includes('gemini')) {
+        return 200000; // 默认 200K
+    }
+    
+    // Claude 系列
+    if (model.includes('claude-3-5') || model.includes('claude-sonnet-4')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('claude')) {
+        return 200000; // 200K tokens
+    }
+    
+    // GPT 系列
+    if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('gpt-4')) {
+        return 8192; // 8K tokens (旧版)
+    }
+    if (model.includes('gpt-3.5-turbo-16k')) {
+        return 16384; // 16K tokens
+    }
+    if (model.includes('gpt-3.5')) {
+        return 4096; // 4K tokens
+    }
+    
+    // DeepSeek 系列
+    if (model.includes('deepseek')) {
+        return 128000; // 128K tokens
+    }
+    
+    // GLM 系列
+    if (model.includes('glm')) {
+        return 128000; // 128K tokens
+    }
+    
+    // MiniMax 系列
+    if (model.includes('minimax')) {
+        return 245760; // ~245K tokens
+    }
+    
+    // 默认值
+    return 200000; // 200K tokens
+}
+
+/**
+ * 估算文本的 token 数量（粗略估算）
+ * 英文：约 4 字符 = 1 token
+ * 中文：约 1.5 字符 = 1 token
+ */
+function estimateTokens(text: string): number {
+    if (!text) return 0;
+    
+    // 统计中文字符
+    const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+    // 统计其他字符
+    const otherChars = text.length - chineseChars;
+    
+    // 中文按 1.5 字符/token，英文按 4 字符/token
+    return Math.ceil(chineseChars / 1.5 + otherChars / 4);
+}
+
+/**
+ * 估算交互历史的总 token 数
+ */
+function estimateExchangesTokens(exchanges: Exchange[]): number {
+    let totalTokens = 0;
+    
+    for (const exchange of exchanges) {
+        // 用户消息
+        if (exchange.request_message) {
+            totalTokens += estimateTokens(exchange.request_message);
+        }
+        
+        // 响应节点
+        if (exchange.response_nodes) {
+            for (const node of exchange.response_nodes) {
+                if (node.type === 0 && node.text_node) {
+                    totalTokens += estimateTokens(node.text_node.content || '');
+                } else if (node.type === 5 && node.tool_use) {
+                    // 工具调用：名称 + 参数
+                    totalTokens += estimateTokens(node.tool_use.tool_name || '');
+                    totalTokens += estimateTokens(node.tool_use.input_json || '');
+                }
+            }
+        }
+        
+        // 请求节点（工具结果）
+        if (exchange.request_nodes) {
+            for (const node of exchange.request_nodes) {
+                if (node.type === 1 && node.tool_result_node) {
+                    totalTokens += estimateTokens(node.tool_result_node.content || '');
+                }
+            }
+        }
+    }
+    
+    return totalTokens;
+}
+
+/**
+ * 获取上下文统计信息
+ */
+export function getContextStats(
     chatHistory: Exchange[],
-    keepRecentCount: number = 3,
-    maxHistoryLength: number = 8
+    tokenLimit: number = 200000,
+    compressionThreshold: number = 0.8
+): ContextStats {
+    const estimatedTokens = estimateExchangesTokens(chatHistory || []);
+    const usagePercentage = (estimatedTokens / tokenLimit) * 100;
+    
+    return {
+        total_exchanges: chatHistory?.length || 0,
+        estimated_tokens: estimatedTokens,
+        token_limit: tokenLimit,
+        usage_percentage: usagePercentage,
+        needs_compression: usagePercentage > (compressionThreshold * 100)
+    };
+}
+
+/**
+ * 智能压缩对话历史（基于 token 使用率）
+ * @param chatHistory 完整的对话历史
+ * @param tokenLimit token 限制
+ * @param targetUsage 目标使用率（默认 40%）
+ * @param compressionThreshold 压缩阈值（默认 80%）
+ * @returns 压缩后的历史和统计信息
+ */
+export async function compressChatHistoryByTokens(
+    chatHistory: Exchange[],
+    tokenLimit: number = 200000,
+    targetUsage: number = 0.4,
+    compressionThreshold: number = 0.8
 ): Promise<CompressionResult> {
     
-    // 如果历史不够长，不需要压缩
-    if (!chatHistory || chatHistory.length <= maxHistoryLength) {
+    if (!chatHistory || chatHistory.length === 0) {
         return {
-            compressed_exchanges: chatHistory || [],
-            original_count: chatHistory?.length || 0,
-            compressed_count: chatHistory?.length || 0
+            compressed_exchanges: [],
+            original_count: 0,
+            compressed_count: 0,
+            estimated_tokens_before: 0,
+            estimated_tokens_after: 0,
+            compression_ratio: 1.0
         };
     }
 
+    const tokensBefore = estimateExchangesTokens(chatHistory);
+    const usagePercentage = (tokensBefore / tokenLimit);
+    
+    // 如果使用率低于阈值，不需要压缩
+    if (usagePercentage < compressionThreshold) {
+        return {
+            compressed_exchanges: chatHistory,
+            original_count: chatHistory.length,
+            compressed_count: chatHistory.length,
+            estimated_tokens_before: tokensBefore,
+            estimated_tokens_after: tokensBefore,
+            compression_ratio: 1.0
+        };
+    }
+
+    // 计算需要保留多少最近的交互
+    const targetTokens = tokenLimit * targetUsage;
+    let keepCount = 0;
+    let accumulatedTokens = 0;
+    
+    // 从后往前累加，直到达到目标 token 数
+    for (let i = chatHistory.length - 1; i >= 0; i--) {
+        const exchangeTokens = estimateExchangesTokens([chatHistory[i]]);
+        if (accumulatedTokens + exchangeTokens > targetTokens && keepCount > 0) {
+            break;
+        }
+        accumulatedTokens += exchangeTokens;
+        keepCount++;
+    }
+    
+    // 至少保留 3 次交互
+    keepCount = Math.max(keepCount, Math.min(3, chatHistory.length));
+    
     // 分离最近的和需要压缩的历史
-    const recentExchanges = chatHistory.slice(-keepRecentCount);
-    const oldExchanges = chatHistory.slice(0, -keepRecentCount);
+    const recentExchanges = chatHistory.slice(-keepCount);
+    const oldExchanges = chatHistory.slice(0, -keepCount);
+
+    if (oldExchanges.length === 0) {
+        return {
+            compressed_exchanges: chatHistory,
+            original_count: chatHistory.length,
+            compressed_count: chatHistory.length,
+            estimated_tokens_before: tokensBefore,
+            estimated_tokens_after: tokensBefore,
+            compression_ratio: 1.0
+        };
+    }
 
     // 生成旧历史的摘要
     const summary = generateHistorySummary(oldExchanges);
+    const summaryTokens = estimateTokens(summary);
 
-    // 创建一个摘要交互，放在压缩历史的开头
+    // 创建一个摘要交互
     const summaryExchange: Exchange = {
-        request_message: "[Context Summary] Previous conversation summary",
+        request_message: "[上下文摘要] 已压缩前 " + oldExchanges.length + " 次交互",
         response_nodes: [{
             type: 0,
             text_node: {
@@ -57,11 +256,17 @@ export async function compressChatHistory(
         request_nodes: []
     };
 
+    const compressedExchanges = [summaryExchange, ...recentExchanges];
+    const tokensAfter = summaryTokens + accumulatedTokens;
+    
     return {
-        compressed_exchanges: [summaryExchange, ...recentExchanges],
+        compressed_exchanges: compressedExchanges,
         summary: summary,
         original_count: chatHistory.length,
-        compressed_count: 1 + recentExchanges.length
+        compressed_count: compressedExchanges.length,
+        estimated_tokens_before: tokensBefore,
+        estimated_tokens_after: tokensAfter,
+        compression_ratio: tokensAfter / tokensBefore
     };
 }
 
@@ -108,10 +313,10 @@ function generateHistorySummary(exchanges: Exchange[]): string {
     }
 
     // 构建摘要
-    summaryParts.push(`📝 Previous ${exchanges.length} exchanges compressed:`);
+    summaryParts.push(`📝 已压缩前 ${exchanges.length} 次交互:`);
     
     if (keyActions.length > 0) {
-        summaryParts.push(`\nKey interactions: ${keyActions.slice(0, 3).join('; ')}`);
+        summaryParts.push(`\n关键交互: ${keyActions.slice(0, 3).join('; ')}`);
     }
 
     if (toolCalls.length > 0) {
@@ -121,12 +326,12 @@ function generateHistorySummary(exchanges: Exchange[]): string {
             .slice(0, 5)
             .map(([tool, count]) => `${tool}(${count})`)
             .join(', ');
-        summaryParts.push(`\nTools used: ${topTools}`);
+        summaryParts.push(`\n工具使用: ${topTools}`);
     }
 
     if (filesAccessed.size > 0) {
         const fileList = Array.from(filesAccessed).slice(0, 5).join(', ');
-        summaryParts.push(`\nFiles accessed: ${fileList}${filesAccessed.size > 5 ? '...' : ''}`);
+        summaryParts.push(`\n访问文件: ${fileList}${filesAccessed.size > 5 ? '...' : ''}`);
     }
 
     return summaryParts.join('\n');
