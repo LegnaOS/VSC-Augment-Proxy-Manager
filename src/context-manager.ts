@@ -35,16 +35,28 @@ export function getModelContextLimit(modelName: string): number {
     
     // Gemini 系列
     if (model.includes('gemini-3')) {
-        return 1000000; // 1M tokens
+        return 1048576; // 1M tokens (2^20)
     }
-    if (model.includes('gemini-2.5') || model.includes('gemini-2.0')) {
-        return 1000000; // 1M tokens
+    if (model.includes('gemini-2.5')) {
+        return 1048576; // 1M tokens
+    }
+    if (model.includes('gemini-2.0-flash-thinking')) {
+        return 32768; // 32K tokens (thinking mode)
+    }
+    if (model.includes('gemini-2.0')) {
+        return 1048576; // 1M tokens
+    }
+    if (model.includes('gemini-1.5-pro')) {
+        return 2097152; // 2M tokens
+    }
+    if (model.includes('gemini-1.5-flash')) {
+        return 1048576; // 1M tokens
     }
     if (model.includes('gemini-1.5')) {
-        return 1000000; // 1M tokens
+        return 1048576; // 1M tokens
     }
     if (model.includes('gemini-exp')) {
-        return 1000000; // 1M tokens
+        return 1048576; // 1M tokens
     }
     if (model.includes('gemini')) {
         return 200000; // 默认 200K

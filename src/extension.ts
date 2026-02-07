@@ -4040,6 +4040,10 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         // 添加系统指令
         if (system) {
             config.systemInstruction = system;
+            outputChannel.appendLine(`[GOOGLE] System prompt length: ${system.length} chars`);
+            if (system.includes('CRITICAL: Response Requirements')) {
+                outputChannel.appendLine(`[GOOGLE] ✓ Gemini-specific behavior guidelines included`);
+            }
         }
         
         // 添加工具定义
