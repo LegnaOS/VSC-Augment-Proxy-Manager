@@ -4052,6 +4052,16 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
             outputChannel.appendLine(`[GOOGLE] Added ${tools.length} tool definitions`);
         }
         
+        // 添加生成配置 - 鼓励文本输出
+        config.generationConfig = {
+            temperature: 0.7,
+            topP: 0.95,
+            topK: 40,
+            maxOutputTokens: 8192,
+            // 注意：Gemini 没有直接的"强制文本输出"参数
+            // 但我们可以通过 temperature 和其他参数来影响行为
+        };
+        
         // 流式生成
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         
@@ -4121,10 +4131,19 @@ async function forwardToGoogleStream(augmentReq: any, res: any) {
         
         // 发送结束标记
         const stopReason = hasToolCalls ? 3 : 1;
+        
+        // 如果只有工具调用没有文本，添加警告
+        if (hasToolCalls && accumulatedText.trim().length === 0) {
+            outputChannel.appendLine(`[GOOGLE] ⚠️ WARNING: Model called tools but provided no text explanation`);
+            // 发送一个提示文本
+            const reminderText = "\n[Note: The model called tools but didn't provide an explanation. This is a known Gemini behavior issue.]";
+            res.write(JSON.stringify({ text: reminderText, nodes: [], stop_reason: 0 }) + '\n');
+        }
+        
         res.write(JSON.stringify({ text: '', nodes: [], stop_reason: stopReason }) + '\n');
         res.end();
         
-        outputChannel.appendLine(`[GOOGLE] Stream complete, stop_reason=${stopReason}`);
+        outputChannel.appendLine(`[GOOGLE] Stream complete, stop_reason=${stopReason}, text_length=${accumulatedText.length}`);
         
     } catch (error: any) {
         outputChannel.appendLine(`[GOOGLE ERROR] ${error.message}`);
