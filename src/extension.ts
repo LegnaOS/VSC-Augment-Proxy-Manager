@@ -1379,6 +1379,30 @@ ${pathGuidance}
             parts.push(`# Additional Rules\n${rulesContent.join('\n\n')}`);
         }
     }
+    
+    // 添加 Google Gemini 特定的行为指导
+    if (currentConfig.provider === 'google') {
+        parts.push(`
+# CRITICAL: Response Requirements for Google Gemini
+- You MUST ALWAYS provide a detailed text response explaining your analysis and findings
+- After using tools, you MUST summarize what you learned and what it means
+- NEVER end the conversation with only tool calls - always follow up with explanations
+- When encountering errors, explain what went wrong and what you'll try next
+- Provide step-by-step reasoning about your approach
+- If you gather information, you MUST analyze and present it to the user
+- Think of yourself as having a conversation - tools are just for gathering data, but you must discuss the results
+
+Example good behavior:
+1. Call tools to gather information
+2. Analyze the results
+3. Provide a comprehensive text response explaining what you found
+4. Suggest next steps or ask clarifying questions
+
+Example bad behavior (DO NOT DO THIS):
+1. Call tools
+2. End conversation without any text response ❌`);
+    }
+    
     return parts.join('\n\n');
 }
 // 核心：处理 chat-stream 请求（带会话级队列防止并发冲突）
