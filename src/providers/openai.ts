@@ -35,6 +35,11 @@ export async function executeOpenAIRequest(
             requestBody.response_format = responseFormat;
             log(`[JSON-MODE] Enabled with format: ${JSON.stringify(responseFormat)}`);
         }
+        // ✅ Kimi Coding Plan 需要 prompt_cache_key
+        if (state.currentConfig.provider === 'kimi-coding') {
+            requestBody.prompt_cache_key = `session-${Date.now()}`;
+            log(`[KIMI-CODING] Added prompt_cache_key: ${requestBody.prompt_cache_key}`);
+        }
         const apiBody = JSON.stringify(requestBody);
         const url = new URL(apiEndpoint);
         const headers: any = {
