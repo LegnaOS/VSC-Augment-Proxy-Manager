@@ -101,6 +101,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                 case 'deepseek': models = this.getDeepseekModels(); break;
                 case 'glm': models = await this.fetchGLMModels(apiKey); break;
                 case 'kimi': models = this.getKimiModels(); break;
+                case 'kimi-coding': models = this.getKimiModels(); break;
                 default: models = [];
             }
             this._view.webview.postMessage({ type: 'modelsList', provider, models });
@@ -224,7 +225,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="section">
         <div class="title">Provider 配置</div>
         <div class="row"><label>选择 Provider</label>
-            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="kimi">Kimi (月之暗面)</option><option value="custom">自定义</option></select>
+            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="kimi">Kimi (月之暗面)</option><option value="kimi-coding">Kimi Coding Plan (编码套餐)</option><option value="custom">自定义</option></select>
         </div>
         <div class="row"><label>API Key</label>
             <div class="api-key-row"><input type="password" id="apiKey" placeholder="sk-..."><button class="small" id="saveKeyBtn">保存</button></div>

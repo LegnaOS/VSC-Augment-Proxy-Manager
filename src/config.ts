@@ -1,6 +1,6 @@
 // ===== Provider 配置常量和格式检测 =====
 
-export const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'kimi', 'custom'];
+export const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'kimi', 'kimi-coding', 'custom'];
 
 export const PROVIDER_NAMES: Record<string, string> = {
     minimax: 'MiniMax',
@@ -10,6 +10,7 @@ export const PROVIDER_NAMES: Record<string, string> = {
     openai: 'OpenAI',
     google: 'Google Gemini',
     kimi: 'Kimi (月之暗面)',
+    'kimi-coding': 'Kimi Coding Plan (编码套餐)',
     custom: '自定义'
 };
 
@@ -21,6 +22,7 @@ export const DEFAULT_BASE_URLS: Record<string, string> = {
     openai: 'https://api.openai.com/v1/chat/completions',
     google: 'https://generativelanguage.googleapis.com/v1beta/models',
     kimi: 'https://api.moonshot.cn/v1/chat/completions',
+    'kimi-coding': 'https://api.kimi.com/coding/v1/chat/completions',
     custom: ''
 };
 
@@ -32,6 +34,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
     openai: 'gpt-4',
     google: 'gemini-3-pro-preview',
     kimi: 'kimi-k2.5',
+    'kimi-coding': 'kimi-k2.5',
     custom: ''
 };
 
@@ -43,7 +46,7 @@ export function isAnthropicFormat(provider: string): boolean {
 
 // 判断是否为 OpenAI 格式
 export function isOpenAIFormat(provider: string): boolean {
-    return ['openai', 'glm', 'kimi'].includes(provider);
+    return ['openai', 'glm', 'kimi', 'kimi-coding'].includes(provider);
 }
 
 // 判断是否为 Google 格式
