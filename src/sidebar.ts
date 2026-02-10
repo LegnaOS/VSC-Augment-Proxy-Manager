@@ -100,6 +100,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                 case 'minimax': models = this.getMinimaxModels(); break;
                 case 'deepseek': models = this.getDeepseekModels(); break;
                 case 'glm': models = await this.fetchGLMModels(apiKey); break;
+                case 'kimi': models = this.getKimiModels(); break;
                 default: models = [];
             }
             this._view.webview.postMessage({ type: 'modelsList', provider, models });
@@ -164,6 +165,9 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
     getDeepseekModels() {
         return [ { id: 'deepseek-chat', name: 'DeepSeek Chat' }, { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (思考模式)' } ];
     }
+    getKimiModels() {
+        return [ { id: 'kimi-k2-0711', name: 'Kimi K2 (推荐)' }, { id: 'moonshot-v1-auto', name: 'Moonshot V1 Auto' }, { id: 'moonshot-v1-8k', name: 'Moonshot V1 8K' }, { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K' }, { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K' } ];
+    }
 
     _getHtml() {
         return `<!DOCTYPE html>
@@ -206,7 +210,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="section">
         <div class="title">Provider 配置</div>
         <div class="row"><label>选择 Provider</label>
-            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="custom">自定义</option></select>
+            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="kimi">Kimi (月之暗面)</option><option value="custom">自定义</option></select>
         </div>
         <div class="row"><label>API Key</label>
             <div class="api-key-row"><input type="password" id="apiKey" placeholder="sk-..."><button class="small" id="saveKeyBtn">保存</button></div>
