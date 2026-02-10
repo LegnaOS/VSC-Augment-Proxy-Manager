@@ -70,6 +70,7 @@
             "google",
             "kimi",
             "kimi-coding",
+            "kimi-anthropic",
             "custom"
           ],
           "enumDescriptions": [
@@ -80,7 +81,8 @@
             "OpenAI (GPT-4)",
             "Google Gemini",
             "Kimi (月之暗面 Moonshot)",
-            "Kimi Coding Plan (编码套餐)",
+            "Kimi Coding Plan (编码套餐 OpenAI 格式)",
+            "Kimi Coding Plan (编码套餐 Anthropic 格式)",
             "自定义 API"
           ],
           "description": "选择 AI API 供应商"

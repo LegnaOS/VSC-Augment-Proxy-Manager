@@ -1,6 +1,6 @@
 // ===== Provider 配置常量和格式检测 =====
 
-export const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'kimi', 'kimi-coding', 'custom'];
+export const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'kimi', 'kimi-coding', 'kimi-anthropic', 'custom'];
 
 export const PROVIDER_NAMES: Record<string, string> = {
     minimax: 'MiniMax',
@@ -10,7 +10,8 @@ export const PROVIDER_NAMES: Record<string, string> = {
     openai: 'OpenAI',
     google: 'Google Gemini',
     kimi: 'Kimi (月之暗面)',
-    'kimi-coding': 'Kimi Coding Plan (编码套餐)',
+    'kimi-coding': 'Kimi Coding Plan (编码套餐 OpenAI)',
+    'kimi-anthropic': 'Kimi Coding Plan (编码套餐 Anthropic)',
     custom: '自定义'
 };
 
@@ -23,6 +24,7 @@ export const DEFAULT_BASE_URLS: Record<string, string> = {
     google: 'https://generativelanguage.googleapis.com/v1beta/models',
     kimi: 'https://api.moonshot.cn/v1/chat/completions',
     'kimi-coding': 'https://api.kimi.com/coding/v1/chat/completions',
+    'kimi-anthropic': 'https://api.moonshot.cn/anthropic/messages',
     custom: ''
 };
 
@@ -34,14 +36,15 @@ export const DEFAULT_MODELS: Record<string, string> = {
     openai: 'gpt-4',
     google: 'gemini-3-pro-preview',
     kimi: 'kimi-k2.5',
-    'kimi-coding': 'kimi-k2.5',
+    'kimi-coding': 'kimi-for-coding',
+    'kimi-anthropic': 'kimi-for-coding',
     custom: ''
 };
 
 // 判断是否为 Anthropic 格式
-// DeepSeek 提供 Anthropic 兼容 API
+// DeepSeek 和 Kimi Anthropic 提供 Anthropic 兼容 API
 export function isAnthropicFormat(provider: string): boolean {
-    return ['anthropic', 'minimax', 'deepseek'].includes(provider);
+    return ['anthropic', 'minimax', 'deepseek', 'kimi-anthropic'].includes(provider);
 }
 
 // 判断是否为 OpenAI 格式

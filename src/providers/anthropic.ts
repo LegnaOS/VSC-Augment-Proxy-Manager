@@ -60,9 +60,9 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     };
 
     // Kimi Coding Plan 需要伪装成 Kimi CLI
-    if (state.currentConfig.provider === 'kimi-coding') {
+    if (state.currentConfig.provider === 'kimi-anthropic') {
         headers['User-Agent'] = 'KimiCLI/0.77';
-        log(`[KIMI-CODING] Added User-Agent: KimiCLI/0.77`);
+        log(`[KIMI-ANTHROPIC] Added User-Agent: KimiCLI/0.77`);
     }
 
     const options = {
