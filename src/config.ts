@@ -24,7 +24,7 @@ export const DEFAULT_BASE_URLS: Record<string, string> = {
     google: 'https://generativelanguage.googleapis.com/v1beta/models',
     kimi: 'https://api.moonshot.cn/v1/chat/completions',
     'kimi-coding': 'https://api.kimi.com/coding/v1/chat/completions',
-    'kimi-anthropic': 'https://api.moonshot.cn/anthropic/messages',
+    'kimi-anthropic': 'https://api.kimi.com/coding',
     custom: ''
 };
 
