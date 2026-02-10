@@ -1,0 +1,53 @@
+# 源代码（只需要编译后的 out 目录）
+src/**
+**/*.ts
+tsconfig.json
+
+# 开发文件
+.git/**
+.github/**
+.claude/**
+.vscode/**
+.gitignore
+
+# 旧版本 vsix 包
+*.vsix
+
+# 日志文件
+*日志
+*日志/**
+*.log
+
+# Node.js 开发依赖（只保留运行时需要的）
+node_modules/@types/**
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/*.md
+node_modules/**/*.txt
+node_modules/**/LICENSE
+node_modules/**/CHANGELOG*
+node_modules/**/.github/**
+node_modules/**/docs/**
+node_modules/**/examples/**
+node_modules/**/coverage/**
+node_modules/**/*.map
+
+# 文档（只保留必要的）
+README_zh.md
+CHANGELOG*.md
+IMPLEMENTATION*.md
+QUICKSTART*.md
+test-*.js
+
+# 开发脚本
+extract-source.js
+inject-windows.ps1
+
+# 打包配置
+.vscodeignore
+package-lock.json
+
+# 其他
+**/*.map
+.DS_Store
+Thumbs.db

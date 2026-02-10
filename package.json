@@ -1,0 +1,258 @@
+{
+  "name": "augment-proxy-manager",
+  "displayName": "Augment Proxy Manager",
+  "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
+  "version": "1.9.0",
+  "publisher": "legna",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LegnaOS/VSC-Augment-Proxy-Manager"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "augmentProxy",
+          "title": "Augment Proxy",
+          "icon": "$(radio-tower)"
+        }
+      ]
+    },
+    "views": {
+      "augmentProxy": [
+        {
+          "type": "webview",
+          "id": "augmentProxy.sidebar",
+          "name": "控制面板"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "augmentProxy.startProxy",
+        "title": "Augment Proxy: 启动代理服务器"
+      },
+      {
+        "command": "augmentProxy.stopProxy",
+        "title": "Augment Proxy: 停止代理服务器"
+      },
+      {
+        "command": "augmentProxy.configureProvider",
+        "title": "Augment Proxy: 配置 API Provider"
+      },
+      {
+        "command": "augmentProxy.showStatus",
+        "title": "Augment Proxy: 显示状态"
+      },
+      {
+        "command": "augmentProxy.injectPlugin",
+        "title": "Augment Proxy: 注入插件"
+      },
+      {
+        "command": "augmentProxy.restorePlugin",
+        "title": "Augment Proxy: 恢复原始插件"
+      }
+    ],
+    "configuration": {
+      "title": "Augment Proxy",
+      "properties": {
+        "augmentProxy.provider": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": [
+            "glm",
+            "minimax",
+            "anthropic",
+            "deepseek",
+            "openai",
+            "google",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "智普 GLM (GLM-4.7)",
+            "MiniMax (MiniMax-M2.2)",
+            "Anthropic (Claude)",
+            "DeepSeek",
+            "OpenAI (GPT-4)",
+            "Google Gemini",
+            "自定义 API"
+          ],
+          "description": "选择 AI API 供应商"
+        },
+        "augmentProxy.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "代理服务器端口"
+        },
+        "augmentProxy.minimax.baseUrl": {
+          "type": "string",
+          "default": "https://api.minimaxi.com/anthropic/v1/messages"
+        },
+        "augmentProxy.minimax.model": {
+          "type": "string",
+          "default": "MiniMax-M2.2"
+        },
+        "augmentProxy.minimax.enableCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Prompt 缓存 (在 tools 和 system 末尾添加 cache_control，节省 token)"
+        },
+        "augmentProxy.minimax.enableInterleavedThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Interleaved Thinking (将 thinking 块回传以保持思维链连续性)"
+        },
+        "augmentProxy.anthropic.baseUrl": {
+          "type": "string",
+          "default": "https://api.anthropic.com/v1/messages"
+        },
+        "augmentProxy.anthropic.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514"
+        },
+        "augmentProxy.deepseek.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com/anthropic/v1/messages",
+          "description": "DeepSeek Anthropic 兼容 API 地址"
+        },
+        "augmentProxy.deepseek.model": {
+          "type": "string",
+          "default": "deepseek-chat",
+          "description": "可选：deepseek-chat (非思考) 或 deepseek-reasoner (思考模式)"
+        },
+        "augmentProxy.deepseek.enableThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用思考模式 (将 thinking 块以 <think> 标签形式展示)"
+        },
+        "augmentProxy.glm.baseUrl": {
+          "type": "string",
+          "default": "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+          "description": "智普 GLM Coding Plan API 地址"
+        },
+        "augmentProxy.glm.model": {
+          "type": "string",
+          "default": "GLM-4.7",
+          "description": "GLM 模型名称 (如 GLM-4.7, GLM-4-Plus 等)"
+        },
+        "augmentProxy.glm.enableThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用深度思考 (reasoning_content 以 <think> 标签形式展示)"
+        },
+        "augmentProxy.glm.enableCache": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用上下文缓存 (如果 API 支持)"
+        },
+        "augmentProxy.openai.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1/chat/completions"
+        },
+        "augmentProxy.openai.model": {
+          "type": "string",
+          "default": "gpt-4"
+        },
+        "augmentProxy.google.baseUrl": {
+          "type": "string",
+          "default": "https://generativelanguage.googleapis.com/v1beta/models",
+          "description": "Google Gemini API 地址"
+        },
+        "augmentProxy.google.model": {
+          "type": "string",
+          "default": "gemini-3-pro-preview",
+          "description": "Google Gemini 模型名称 (如 gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206 等)"
+        },
+        "augmentProxy.google.enableContextCompression": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用智能上下文压缩 (基于 token 使用率自动压缩)"
+        },
+        "augmentProxy.google.compressionThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "触发压缩的阈值百分比 (默认 80%，即使用率超过 80% 时触发压缩)"
+        },
+        "augmentProxy.custom.baseUrl": {
+          "type": "string",
+          "default": ""
+        },
+        "augmentProxy.custom.model": {
+          "type": "string",
+          "default": ""
+        },
+        "augmentProxy.custom.format": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": [
+            "anthropic",
+            "openai"
+          ]
+        },
+        "augmentProxy.embedding.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用语义搜索 (需要配置 Embedding API Key)"
+        },
+        "augmentProxy.embedding.provider": {
+          "type": "string",
+          "default": "glm",
+          "enum": [
+            "glm",
+            "openai",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "智谱 GLM embedding-3",
+            "OpenAI text-embedding-3-small",
+            "自定义 Embedding API"
+          ],
+          "description": "Embedding 供应商"
+        },
+        "augmentProxy.embedding.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Embedding API Key (留空则使用 LLM 的 API Key)"
+        },
+        "augmentProxy.embedding.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "自定义 Embedding API 地址 (仅 custom 模式)"
+        },
+        "augmentProxy.embedding.model": {
+          "type": "string",
+          "default": "",
+          "description": "自定义 Embedding 模型名称 (留空使用默认)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "source-map": "^0.7.6",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@google/genai": "^1.40.0",
+    "@huggingface/transformers": "^3.8.1",
+    "level": "^10.0.0"
+  }
+}

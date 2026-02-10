@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+
+# Package files
+*.vsix
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+AugmentProxy日志
+Augment日志
+
+# Debug/Test files
+extract-source.js
+test-*.js
+IMPLEMENTATION_*.md
+CHANGELOG_*.md
