@@ -62,20 +62,20 @@
           "type": "string",
           "default": "anthropic",
           "enum": [
-            "glm",
             "minimax",
             "anthropic",
             "deepseek",
+            "glm",
             "openai",
             "google",
             "kimi",
             "custom"
           ],
           "enumDescriptions": [
-            "智普 GLM (GLM-4.7)",
             "MiniMax (MiniMax-M2.2)",
             "Anthropic (Claude)",
             "DeepSeek",
+            "智普 GLM (GLM-4.7)",
             "OpenAI (GPT-4)",
             "Google Gemini",
             "Kimi (月之暗面 Moonshot)",
