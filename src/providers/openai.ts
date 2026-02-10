@@ -8,13 +8,15 @@ import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendA
 import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment } from '../tools';
 import { applyContextCompression } from '../context-compression';
 
-// ========== 执行单次 OpenAI API 请求 ==========
+// ========== 执行单次 OpenAI API 请求（真流式） ==========
+// onTextDelta: 文本增量到达时立即回调，实现真正的流式输出
 export async function executeOpenAIRequest(
     messages: any[],
     tools: any[],
     apiEndpoint: string,
     apiKey: string,
-    model: string
+    model: string,
+    onTextDelta?: (delta: string) => void
 ): Promise<OpenAIRequestResult> {
     return new Promise((resolve, reject) => {
         const requestBody: any = {
@@ -71,13 +73,23 @@ export async function executeOpenAIRequest(
                             const toolCallsDelta = choice?.delta?.tool_calls;
                             if (choice?.finish_reason) { result.finishReason = choice.finish_reason; }
                             if (reasoningDelta) {
-                                if (!inThinking) { inThinking = true; result.text += '<think>\n'; }
+                                if (!inThinking) {
+                                    inThinking = true;
+                                    result.text += '<think>\n';
+                                    if (onTextDelta) onTextDelta('<think>\n');
+                                }
                                 result.text += reasoningDelta;
                                 result.thinkingContent += reasoningDelta;
+                                if (onTextDelta) onTextDelta(reasoningDelta);
                             }
                             if (delta) {
-                                if (inThinking) { inThinking = false; result.text += '\n</think>\n\n'; }
+                                if (inThinking) {
+                                    inThinking = false;
+                                    result.text += '\n</think>\n\n';
+                                    if (onTextDelta) onTextDelta('\n</think>\n\n');
+                                }
                                 result.text += delta;
+                                if (onTextDelta) onTextDelta(delta);
                             }
                             if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
                                 for (const tc of toolCallsDelta) {
@@ -99,7 +111,10 @@ export async function executeOpenAIRequest(
                 }
             });
             apiRes.on('end', () => {
-                if (inThinking) { result.text += '\n</think>\n\n'; }
+                if (inThinking) {
+                    result.text += '\n</think>\n\n';
+                    if (onTextDelta) onTextDelta('\n</think>\n\n');
+                }
                 for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
                 log(`[API-EXEC] Complete: text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}`);
                 resolve(result);
@@ -181,17 +196,21 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
 
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
 
+    // 真流式回调：每个文本增量立即写入 NDJSON 响应
+    const onTextDelta = (delta: string) => {
+        try {
+            res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n');
+        } catch (e) { /* 连接可能已关闭 */ }
+    };
+
     try {
         while (iteration < MAX_ITERATIONS) {
             iteration++;
             log(`[LOOP] Iteration ${iteration}/${MAX_ITERATIONS}`);
 
-            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model);
-
-            if (result.text) {
-                res.write(JSON.stringify({ text: result.text, nodes: [], stop_reason: 0 }) + '\n');
-                accumulatedText += result.text;
-            }
+            // 第一轮迭代使用流式回调，后续 RAG 循环也流式输出
+            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model, onTextDelta);
+            accumulatedText += result.text;
 
             if (result.toolCalls.length === 0 || result.finishReason === 'stop') {
                 log(`[LOOP] No tool calls or stop, ending loop`);
@@ -226,10 +245,16 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                     continue;
                 }
 
+                // 处理其他工具调用（可能被拦截或转发给 Augment）
                 for (const tc of otherToolCalls) {
                     const toolNode = await processToolCallForAugment(tc, workspaceInfo, result.finishReason);
                     if (toolNode) {
                         res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+
+                        // 如果是拦截的工具（type=1 tool_result），不需要等待 Augment 响应，直接继续
+                        if (toolNode.type === 1) {
+                            log(`[LOOP] Tool ${tc.name} was intercepted, result sent back to AI`);
+                        }
                     }
                 }
                 res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');

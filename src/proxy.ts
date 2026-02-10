@@ -450,33 +450,7 @@ function handleChatStream(req: any, res: any) {
             const curPromise = new Promise<void>(r => { resolveReq = r; });
             conversationQueues.set(conversationId, curPromise);
             try {
-                // 调试日志
-                log(`[DEBUG] Request keys: ${Object.keys(augmentReq).join(', ')}`);
-                if (augmentReq.nodes?.length) {
-                    augmentReq.nodes.forEach((n: any, i: number) => {
-                        log(`[DEBUG] node[${i}]: type=${n.type}, keys=${Object.keys(n).join(',')}`);
-                        if (n.type === 1 && n.tool_result_node) log(`[DEBUG] node[${i}] TOOL_RESULT: tool_use_id=${n.tool_result_node.tool_use_id}, content_len=${(n.tool_result_node.content || '').length}`);
-                        if (n.type === 4 && n.ide_state_node) log(`[DEBUG] node[${i}] IDE_STATE: ${JSON.stringify(n.ide_state_node).substring(0, 500)}`);
-                    });
-                }
                 const workspaceInfo = extractWorkspaceInfo(augmentReq);
-                log(`[WORKSPACE] extracted: workspace=${workspaceInfo.workspacePath || 'N/A'}, repositoryRoot=${workspaceInfo.repositoryRoot || 'N/A'}, cwd=${workspaceInfo.cwd || 'N/A'}, currentFile=${workspaceInfo.currentFile || 'N/A'}`);
-                if (augmentReq.chat_history?.length) {
-                    augmentReq.chat_history.forEach((ex: any, i: number) => {
-                        const rn = ex.response_nodes || []; const qn = ex.request_nodes || [];
-                        log(`[DEBUG] chat_history[${i}]: response_nodes=${rn.length}, request_nodes=${qn.length}, has_request_message=${!!ex.request_message}`);
-                        if (ex.request_message) log(`[DEBUG] chat_history[${i}].request_message: "${(ex.request_message || '').slice(0, 100)}..."`);
-                        rn.forEach((n: any, j: number) => { if (n.type === 5) { const tu = n.tool_use || n.tool_use_node || {}; log(`[DEBUG] chat_history[${i}].response_nodes[${j}]: TOOL_USE, tool_use=${JSON.stringify(tu).slice(0, 300)}`); } });
-                        qn.forEach((n: any, j: number) => { if (n.type === 1) log(`[DEBUG] chat_history[${i}].request_nodes[${j}]: TOOL_RESULT, tool_result=${JSON.stringify(n.tool_result_node || {}).slice(0, 200)}`); });
-                    });
-                }
-                if (augmentReq.blobs) log(`[DEBUG] blobs: ${Array.isArray(augmentReq.blobs) ? `array[${augmentReq.blobs.length}]` : Object.keys(augmentReq.blobs).slice(0, 5).join(',')}`);
-                if (augmentReq.user_guided_blobs) log(`[DEBUG] user_guided_blobs: ${Array.isArray(augmentReq.user_guided_blobs) ? `array[${augmentReq.user_guided_blobs.length}]` : Object.keys(augmentReq.user_guided_blobs).slice(0, 5).join(',')}`);
-                if (augmentReq.path) log(`[DEBUG] path: ${augmentReq.path}`);
-                if (augmentReq.prefix) log(`[DEBUG] prefix length: ${augmentReq.prefix.length}`);
-                if (augmentReq.suffix) log(`[DEBUG] suffix length: ${augmentReq.suffix.length}`);
-                if (augmentReq.tool_definitions) log(`[DEBUG] tool_definitions: ${JSON.stringify(augmentReq.tool_definitions).substring(0, 500)}`);
-                else log(`[DEBUG] tool_definitions: undefined or null`);
                 if (!state.currentConfig.apiKey) { sendAugmentError(res, `No API key for ${state.currentConfig.provider}`); return; }
                 // 转发到目标 provider
                 if (isAnthropicFormat(state.currentConfig.provider)) await forwardToAnthropicStream(augmentReq, res);

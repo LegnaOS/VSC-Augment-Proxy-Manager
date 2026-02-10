@@ -2,7 +2,7 @@
 
 import { state, log } from '../globals';
 import { augmentToGeminiMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError } from '../messages';
-import { convertToolDefinitionsToGemini, applyPathFixes } from '../tools';
+import { convertToolDefinitionsToGemini, applyPathFixes, fixToolCallInput, convertOrInterceptFileEdit } from '../tools';
 import { applyContextCompression } from '../context-compression';
 
 // ========== Google Gemini API 转发函数 ==========
@@ -98,18 +98,40 @@ export async function forwardToGoogleStream(augmentReq: any, res: any) {
 
                     if (part.functionCall) {
                         hasToolCalls = true;
-                        const toolNode = {
-                            type: 5,
-                            tool_use: {
-                                tool_use_id: `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                                tool_name: part.functionCall.name,
-                                input_json: JSON.stringify(part.functionCall.args || {}),
-                                thought_signature: part.thoughtSignature || part.functionCall.thoughtSignature || sharedThoughtSignature
-                            }
-                        };
-                        applyPathFixes(toolNode.tool_use, workspaceInfo);
-                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
-                        log(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                        const toolUseId = `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        let input = part.functionCall.args || {};
+
+                        // 应用参数修复
+                        input = fixToolCallInput(part.functionCall.name, input, workspaceInfo);
+
+                        // 尝试拦截文件编辑工具
+                        const interceptResult = convertOrInterceptFileEdit(part.functionCall.name, input, workspaceInfo);
+
+                        if (interceptResult && interceptResult.intercepted) {
+                            // 工具被拦截并直接执行，返回 tool_result 给 AI
+                            log(`[INTERCEPT] Tool ${part.functionCall.name} intercepted, sending result back to AI`);
+                            const toolResultNode = {
+                                type: 1,
+                                tool_result_node: {
+                                    tool_use_id: toolUseId,
+                                    content: JSON.stringify(interceptResult.result)
+                                }
+                            };
+                            res.write(JSON.stringify({ text: '', nodes: [toolResultNode], stop_reason: 0 }) + '\n');
+                        } else {
+                            // 正常工具调用，发送 tool_use 给 Augment
+                            const toolNode = {
+                                type: 5,
+                                tool_use: {
+                                    tool_use_id: toolUseId,
+                                    tool_name: interceptResult ? interceptResult.toolName : part.functionCall.name,
+                                    input_json: JSON.stringify(interceptResult ? interceptResult.input : input),
+                                    thought_signature: part.thoughtSignature || part.functionCall.thoughtSignature || sharedThoughtSignature
+                                }
+                            };
+                            res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+                            log(`[GOOGLE] Tool call: ${part.functionCall.name}`);
+                        }
                     }
                 }
             }

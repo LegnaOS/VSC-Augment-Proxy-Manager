@@ -83,14 +83,43 @@ export function fixToolCallInput(toolName: string, input: any, workspaceInfo: an
     }
 
     // ========== view 参数修正 ==========
-    if (toolName === 'view' && input.view_range !== undefined && typeof input.view_range === 'string') {
-        try {
-            const parsed = JSON.parse(input.view_range);
-            if (Array.isArray(parsed) && parsed.length === 2) {
-                input.view_range = parsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
-                log(`[FIX] view_range: string -> array`);
+    if (toolName === 'view') {
+        // view_range 字符串 → 数组
+        if (input.view_range !== undefined && typeof input.view_range === 'string') {
+            try {
+                const parsed = JSON.parse(input.view_range);
+                if (Array.isArray(parsed) && parsed.length === 2) {
+                    input.view_range = parsed.map((n: any) => typeof n === 'string' ? parseInt(n, 10) : n);
+                    log(`[FIX] view_range: string -> array`);
+                }
+            } catch (e) { /* ignore */ }
+        }
+        // view_range 负数修正 — 防止 "Invalid line range: startLine=-1, stopLine=-1"
+        if (Array.isArray(input.view_range)) {
+            input.view_range = input.view_range.map((n: number) => (typeof n === 'number' && n < 1) ? 1 : n);
+            log(`[FIX] view_range: clamped negative values`);
+        }
+    }
+
+    // ========== remove-files 参数修正 ==========
+    if (toolName === 'remove-files') {
+        // 确保 file_paths 存在且为数组 — 防止 "Cannot read properties of undefined (reading 'length')"
+        if (!Array.isArray(input.file_paths)) {
+            if (typeof input.file_paths === 'string') {
+                input.file_paths = [input.file_paths];
+                log(`[FIX] remove-files: file_paths string -> array`);
+            } else if (input.paths && Array.isArray(input.paths)) {
+                input.file_paths = input.paths;
+                delete input.paths;
+                log(`[FIX] remove-files: paths -> file_paths`);
+            } else if (input.path && typeof input.path === 'string') {
+                input.file_paths = [input.path];
+                log(`[FIX] remove-files: path -> file_paths`);
+            } else {
+                input.file_paths = [];
+                log(`[FIX] remove-files: file_paths was missing, set to empty array`);
             }
-        } catch (e) { /* ignore */ }
+        }
     }
 
     // ========== save-file 参数修正 ==========
@@ -110,6 +139,67 @@ export function fixToolCallInput(toolName: string, input: any, workspaceInfo: an
         }
         if (input.old_str !== undefined && input.old_str_1 === undefined) { input.old_str_1 = input.old_str; delete input.old_str; }
         if (input.new_str !== undefined && input.new_str_1 === undefined) { input.new_str_1 = input.new_str; delete input.new_str; }
+    }
+
+    // ========== read-file 参数修正 ==========
+    if (toolName === 'read-file') {
+        // 扩展期望 file_path，但模型可能生成 path
+        if (input.path !== undefined && input.file_path === undefined) {
+            input.file_path = input.path; delete input.path;
+            log(`[FIX] read-file: path -> file_path`);
+        }
+    }
+
+    // ========== grep-search 参数修正 ==========
+    if (toolName === 'grep-search') {
+        // directory → directory_absolute_path
+        if (input.directory !== undefined && input.directory_absolute_path === undefined) {
+            input.directory_absolute_path = input.directory; delete input.directory;
+            log(`[FIX] grep-search: directory -> directory_absolute_path`);
+        }
+        if (input.dir !== undefined && input.directory_absolute_path === undefined) {
+            input.directory_absolute_path = input.dir; delete input.dir;
+            log(`[FIX] grep-search: dir -> directory_absolute_path`);
+        }
+        // pattern → query
+        if (input.pattern !== undefined && input.query === undefined) {
+            input.query = input.pattern; delete input.pattern;
+            log(`[FIX] grep-search: pattern -> query`);
+        }
+        if (input.search !== undefined && input.query === undefined) {
+            input.query = input.search; delete input.search;
+            log(`[FIX] grep-search: search -> query`);
+        }
+    }
+
+    // ========== launch-process 参数修正 ==========
+    if (toolName === 'launch-process') {
+        // wait 字符串 → 布尔
+        if (typeof input.wait === 'string') {
+            input.wait = input.wait === 'true';
+            log(`[FIX] launch-process: wait string -> boolean`);
+        }
+        // max_wait_seconds 字符串 → 数字
+        if (typeof input.max_wait_seconds === 'string') {
+            input.max_wait_seconds = parseInt(input.max_wait_seconds, 10);
+            log(`[FIX] launch-process: max_wait_seconds string -> number`);
+        }
+    }
+
+    // ========== save-file instructions_reminder 修正 ==========
+    if (toolName === 'save-file') {
+        if (!input.instructions_reminder) {
+            input.instructions_reminder = 'LIMIT THE FILE CONTENT TO AT MOST 150 LINES. IF MORE CONTENT NEEDS TO BE ADDED USE THE str-replace-editor TOOL TO EDIT THE FILE AFTER IT HAS BEEN CREATED.';
+        }
+    }
+
+    // ========== 通用布尔字符串修正 ==========
+    const boolFields = ['wait', 'case_sensitive', 'only_selected', 'keep_stdin_open', 'add_last_line_newline'];
+    for (const field of boolFields) {
+        if (typeof input[field] === 'string') {
+            input[field] = input[field] === 'true';
+            log(`[FIX] ${toolName}: ${field} string -> boolean`);
+        }
     }
 
     return input;
@@ -195,17 +285,18 @@ export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefin
 
     for (const def of toolDefs) {
         if (def.name) {
-            if (def.name === 'save-file') {
-                log(`[DEBUG] save-file tool schema: ${JSON.stringify(def.input_json_schema)}`);
-            }
-            let parameters = def.input_json_schema;
+            // ⚠️ 关键修复：Augment 扩展发送的字段名是 input_schema_json（不是 input_json_schema）
+            let parameters = def.input_schema_json || def.input_json_schema;
             if (typeof parameters === 'string') {
                 try {
                     parameters = JSON.parse(parameters);
                 } catch (e) {
-                    log(`[WARN] Failed to parse input_json_schema for ${def.name}: ${e}`);
+                    log(`[WARN] Failed to parse input_schema_json for ${def.name}: ${e}`);
                     parameters = { type: 'object', properties: {} };
                 }
+            }
+            if (def.name === 'save-file') {
+                log(`[DEBUG] save-file tool schema: ${JSON.stringify(parameters)}`);
             }
             tools.push({
                 type: 'function',
@@ -226,7 +317,8 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
     const tools: any[] = [];
     for (const def of toolDefs) {
         if (!def.name) continue;
-        let parameters = def.input_json_schema || def.input_schema;
+        // ⚠️ 关键修复：Augment 扩展发送的字段名是 input_schema_json
+        let parameters = def.input_schema_json || def.input_json_schema || def.input_schema;
         if (typeof parameters === 'string') {
             try {
                 parameters = JSON.parse(parameters);
@@ -243,8 +335,310 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
     return tools;
 }
 
+// ========== 智能工具转换和拦截：edit-file/save-file/str-replace-editor ==========
+// Augment 插件标记 str-replace-editor 为不支持的工具（unsupportedSidecarTools）
+// 策略：拦截这些工具调用，直接在代理层执行文件编辑，然后返回成功结果
+// ========== str-replace-editor 核心匹配逻辑（基于 Augment 逆向） ==========
+function findMatchInContent(content: string, oldStr: string, startLine?: number, endLine?: number): { index: number; matchedStr: string } | null {
+    const lines = content.split('\n');
+
+    // 1. 逐字精确匹配
+    let index = content.indexOf(oldStr);
+    if (index !== -1) {
+        return { index, matchedStr: oldStr };
+    }
+
+    // 2. 如果提供了行号，尝试在行号范围内匹配（带 20% 容差）
+    if (startLine !== undefined && endLine !== undefined && startLine > 0 && endLine > 0) {
+        const tolerance = 0.2;
+        const rangeStart = Math.max(0, Math.floor(startLine - 1 - (endLine - startLine + 1) * tolerance));
+        const rangeEnd = Math.min(lines.length - 1, Math.ceil(endLine - 1 + (endLine - startLine + 1) * tolerance));
+
+        const rangeContent = lines.slice(rangeStart, rangeEnd + 1).join('\n');
+        const rangeOffset = lines.slice(0, rangeStart).join('\n').length + (rangeStart > 0 ? 1 : 0);
+
+        index = rangeContent.indexOf(oldStr);
+        if (index !== -1) {
+            return { index: rangeOffset + index, matchedStr: oldStr };
+        }
+    }
+
+    // 3. 基础模糊匹配：trim 每行后再匹配
+    const trimmedOld = oldStr.split('\n').map(l => l.trim()).join('\n');
+    const trimmedContent = lines.map(l => l.trim()).join('\n');
+
+    const trimmedIndex = trimmedContent.indexOf(trimmedOld);
+    if (trimmedIndex !== -1) {
+        // 找到 trimmed 匹配后，需要映射回原始内容的位置
+        let charCount = 0;
+        let trimmedCharCount = 0;
+        for (let i = 0; i < lines.length; i++) {
+            const originalLine = lines[i];
+            const trimmedLine = originalLine.trim();
+
+            if (trimmedCharCount === trimmedIndex) {
+                return { index: charCount, matchedStr: oldStr };
+            }
+
+            if (trimmedCharCount > trimmedIndex) {
+                break;
+            }
+
+            charCount += originalLine.length + 1; // +1 for \n
+            trimmedCharCount += trimmedLine.length + 1;
+        }
+    }
+
+    return null;
+}
+
+export function convertOrInterceptFileEdit(toolName: string, input: any, workspaceInfo: any): { toolName: string; input: any; intercepted?: boolean; result?: any } | null {
+    const fs = require('fs');
+    const path = require('path');
+
+    // ========== 拦截 str-replace-editor：直接执行文件编辑 ==========
+    if (toolName === 'str-replace-editor') {
+        const filePath = input.path || input.file_path;
+        const command = input.command || 'str_replace';
+
+        if (!filePath) {
+            log(`[INTERCEPT] str-replace-editor missing path`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: 'Missing path parameter' }
+            };
+        }
+
+        const repoRoot = workspaceInfo?.repositoryRoot || workspaceInfo?.workspacePath || '';
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
+
+        try {
+            if (!fs.existsSync(fullPath)) {
+                log(`[INTERCEPT] str-replace-editor: file not found: ${fullPath}`);
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: `File not found: ${filePath}` }
+                };
+            }
+
+            let content = fs.readFileSync(fullPath, 'utf-8');
+            const originalLineEnding = content.includes('\r\n') ? '\r\n' : '\n';
+
+            // 标准化行尾为 LF（匹配 Augment 的 OD() 函数）
+            content = content.replace(/\r\n/g, '\n');
+
+            // ========== 处理 insert 命令 ==========
+            if (command === 'insert') {
+                const insertLine = input.insert_line_1 || input.insert_line;
+                const newStr = input.new_str_1 || input.new_str;
+
+                if (insertLine === undefined || newStr === undefined) {
+                    return {
+                        toolName,
+                        input,
+                        intercepted: true,
+                        result: { success: false, error: 'insert command requires insert_line and new_str' }
+                    };
+                }
+
+                const lines = content.split('\n');
+                const lineNum = parseInt(insertLine);
+
+                if (lineNum < 0 || lineNum > lines.length) {
+                    return {
+                        toolName,
+                        input,
+                        intercepted: true,
+                        result: { success: false, error: `insert_line ${lineNum} out of range (0-${lines.length})` }
+                    };
+                }
+
+                lines.splice(lineNum, 0, newStr);
+                content = lines.join('\n');
+
+                // 恢复原始行尾
+                if (originalLineEnding === '\r\n') {
+                    content = content.replace(/\n/g, '\r\n');
+                }
+
+                fs.writeFileSync(fullPath, content, 'utf-8');
+                log(`[INTERCEPT] ✅ str-replace-editor (insert): inserted at line ${lineNum} in ${filePath}`);
+
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: true, message: `Successfully inserted at line ${lineNum} in ${filePath}` }
+                };
+            }
+
+            // ========== 处理 str_replace 命令（支持多条目） ==========
+            if (command === 'str_replace') {
+                // 收集所有替换条目
+                const replacements: Array<{ oldStr: string; newStr: string; startLine?: number; endLine?: number }> = [];
+
+                for (let i = 1; i <= 20; i++) {
+                    const oldStr = input[`old_str_${i}`];
+                    if (!oldStr) {
+                        if (i === 1) {
+                            // 尝试无后缀的参数名
+                            const fallbackOld = input.old_str;
+                            const fallbackNew = input.new_str;
+                            if (fallbackOld) {
+                                replacements.push({
+                                    oldStr: fallbackOld,
+                                    newStr: fallbackNew || '',
+                                    startLine: input.old_str_start_line_number,
+                                    endLine: input.old_str_end_line_number
+                                });
+                            }
+                        }
+                        break;
+                    }
+
+                    replacements.push({
+                        oldStr,
+                        newStr: input[`new_str_${i}`] || '',
+                        startLine: input[`old_str_start_line_number_${i}`],
+                        endLine: input[`old_str_end_line_number_${i}`]
+                    });
+                }
+
+                if (replacements.length === 0) {
+                    return {
+                        toolName,
+                        input,
+                        intercepted: true,
+                        result: { success: false, error: 'No replacement entries found (missing old_str_1 or old_str)' }
+                    };
+                }
+
+                log(`[INTERCEPT] str-replace-editor: processing ${replacements.length} replacement(s)`);
+
+                // 按顺序执行所有替换
+                for (let i = 0; i < replacements.length; i++) {
+                    const { oldStr, newStr, startLine, endLine } = replacements[i];
+
+                    const match = findMatchInContent(content, oldStr, startLine, endLine);
+
+                    if (!match) {
+                        log(`[INTERCEPT] str-replace-editor: replacement ${i + 1} failed - old_str not found`);
+                        return {
+                            toolName,
+                            input,
+                            intercepted: true,
+                            result: {
+                                success: false,
+                                error: `Replacement ${i + 1}/${replacements.length} failed: old_str not found in file${startLine ? ` (around lines ${startLine}-${endLine})` : ''}`
+                            }
+                        };
+                    }
+
+                    // 执行替换
+                    content = content.substring(0, match.index) + newStr + content.substring(match.index + match.matchedStr.length);
+                    log(`[INTERCEPT] str-replace-editor: replacement ${i + 1}/${replacements.length} succeeded`);
+                }
+
+                // 恢复原始行尾
+                if (originalLineEnding === '\r\n') {
+                    content = content.replace(/\n/g, '\r\n');
+                }
+
+                fs.writeFileSync(fullPath, content, 'utf-8');
+                log(`[INTERCEPT] ✅ str-replace-editor: successfully applied ${replacements.length} replacement(s) to ${filePath}`);
+
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: true, message: `Successfully applied ${replacements.length} replacement(s) to ${filePath}` }
+                };
+            }
+
+            // 未知命令
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: `Unknown command: ${command}` }
+            };
+
+        } catch (e: any) {
+            log(`[INTERCEPT] str-replace-editor error: ${e.message}`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: e.message }
+            };
+        }
+    }
+
+    // ========== 拦截 edit-file：直接返回错误，提示使用 str-replace-editor ==========
+    if (toolName === 'edit-file') {
+        log(`[INTERCEPT] edit-file: not supported, returning error`);
+        return {
+            toolName,
+            input,
+            intercepted: true,
+            result: {
+                success: false,
+                error: 'Server-side edit-file is not supported in proxy mode. Please use str-replace-editor tool instead to make precise edits.'
+            }
+        };
+    }
+
+    // ========== 拦截 save-file 覆盖已有文件：直接执行写入 ==========
+    if (toolName === 'save-file') {
+        const filePath = input.path || input.file_path;
+        const fileContent = input.file_content || input.content;
+
+        if (!filePath || fileContent === undefined) {
+            log(`[INTERCEPT] save-file missing path or content`);
+            return null;
+        }
+
+        const repoRoot = workspaceInfo?.repositoryRoot || workspaceInfo?.workspacePath || '';
+        const fullPath = path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
+
+        if (fs.existsSync(fullPath)) {
+            log(`[INTERCEPT] ⚠️ save-file on existing file: directly overwriting ${filePath}`);
+
+            try {
+                fs.writeFileSync(fullPath, fileContent, 'utf-8');
+                log(`[INTERCEPT] ✅ save-file: successfully overwrote ${filePath}`);
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: true, message: `Successfully saved ${filePath}` }
+                };
+            } catch (e: any) {
+                log(`[INTERCEPT] save-file error: ${e.message}`);
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: e.message }
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
 // ========== 处理工具调用并转换为 Augment 格式 ==========
 // 🔧 重构：使用 fixToolCallInput() 替代重复的内联逻辑
+// 🔧 新增：智能工具转换和拦截（edit-file/save-file/str-replace-editor）
+// 返回值：
+//   - { type: 5, tool_use: {...} } - 正常工具调用，发送给 Augment
+//   - { type: 1, tool_result_node: {...} } - 拦截工具，直接返回结果给 AI
+//   - null - 跳过（如截断的工具调用）
 export function processToolCallForAugment(
     tc: { id: string; name: string; arguments: string },
     workspaceInfo: any,
@@ -257,10 +651,33 @@ export function processToolCallForAugment(
     }
 
     let inputJson = tc.arguments || '{}';
+    let finalToolName = tc.name;
 
     try {
-        const parsed = JSON.parse(tc.arguments);
-        const fixed = fixToolCallInput(tc.name, parsed, workspaceInfo);
+        let parsed = JSON.parse(tc.arguments);
+
+        // 🔧 智能转换和拦截：edit-file/save-file/str-replace-editor
+        const converted = convertOrInterceptFileEdit(tc.name, parsed, workspaceInfo);
+        if (converted) {
+            // 如果是拦截（直接执行），返回 tool_result 给 AI
+            if (converted.intercepted) {
+                log(`[INTERCEPT] ${tc.name} executed directly, result: ${JSON.stringify(converted.result)}`);
+                return {
+                    type: 1, // TOOL_RESULT
+                    tool_result_node: {
+                        tool_use_id: tc.id,
+                        content: JSON.stringify(converted.result)
+                    }
+                };
+            }
+
+            // 如果是转换，使用转换后的工具名和参数
+            finalToolName = converted.toolName;
+            parsed = converted.input;
+            log(`[CONVERT] ${tc.name} → ${finalToolName}`);
+        }
+
+        const fixed = fixToolCallInput(finalToolName, parsed, workspaceInfo);
         inputJson = JSON.stringify(fixed);
     } catch (e) {
         log(`[TOOL] Arguments parse error: ${e}`);
@@ -274,7 +691,7 @@ export function processToolCallForAugment(
         type: 5, // TOOL_USE
         tool_use: {
             tool_use_id: tc.id,
-            tool_name: tc.name,
+            tool_name: finalToolName,
             input_json: inputJson
         }
     };

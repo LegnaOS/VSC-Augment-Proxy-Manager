@@ -4,7 +4,7 @@ import * as https from 'https';
 import { URL } from 'url';
 import { state, log } from '../globals';
 import { augmentToAnthropicMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError } from '../messages';
-import { convertToolDefinitions, fixToolCallInput } from '../tools';
+import { convertToolDefinitions, fixToolCallInput, convertOrInterceptFileEdit } from '../tools';
 import { applyContextCompression } from '../context-compression';
 
 // 转发到 Anthropic 格式 API (流式，发送增量)
@@ -15,10 +15,6 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     const rawTools = augmentReq.tool_definitions || [];
-    log(`[DEBUG] tool_definitions count: ${rawTools.length}`);
-    if (rawTools.length > 0) {
-        log(`[DEBUG] tool_definitions[0] keys: ${Object.keys(rawTools[0]).join(',')}`);
-    }
     const tools = convertToolDefinitions(rawTools);
 
     // MiniMax Prompt 缓存
@@ -52,21 +48,9 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     };
     if (cachedTools && cachedTools.length > 0) {
         requestBody.tools = cachedTools;
-        log(`[DEBUG] Tools: ${cachedTools.length} definitions`);
     }
     const apiBody = JSON.stringify(requestBody);
-
-    // 调试：检查消息格式
-    for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-        if (typeof msg.content === 'string') {
-            log(`[DEBUG] Message[${i}] role=${msg.role}, content=string(${msg.content.length})`);
-        } else if (Array.isArray(msg.content)) {
-            const types = msg.content.map((p: any) => p.type).join(',');
-            log(`[DEBUG] Message[${i}] role=${msg.role}, content=array[${msg.content.length}] types=[${types}]`);
-        }
-    }
-    log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages`);
+    log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages, ${cachedTools?.length || 0} tools`);
 
     const url = new URL(state.currentConfig.baseUrl);
     const options = {
@@ -156,20 +140,38 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
                             try {
                                 let input = JSON.parse(currentToolUse.inputJson || '{}');
                                 input = fixToolCallInput(currentToolUse.name, input, workspaceInfo);
-                                const toolNode = {
-                                    type: 5,
-                                    tool_use: {
-                                        tool_use_id: currentToolUse.id,
-                                        tool_name: currentToolUse.name,
-                                        input_json: JSON.stringify(input)
-                                    }
-                                };
-                                const responseData = { text: '', nodes: [toolNode], stop_reason: 0 };
-                                const responseStr = JSON.stringify(responseData);
-                                res.write(responseStr + '\n');
-                                log(`[DEBUG] Tool use complete: ${currentToolUse.name}, id: ${currentToolUse.id}`);
-                                log(`[DEBUG] Sending tool_use response: ${responseStr.slice(0, 500)}`);
-                                hasToolUse = true;
+
+                                // 尝试拦截文件编辑工具
+                                const interceptResult = convertOrInterceptFileEdit(currentToolUse.name, input, workspaceInfo);
+
+                                if (interceptResult && interceptResult.intercepted) {
+                                    // 工具被拦截并直接执行，返回 tool_result 给 AI
+                                    log(`[INTERCEPT] Tool ${currentToolUse.name} intercepted, sending result back to AI`);
+                                    const toolResultNode = {
+                                        type: 1,
+                                        tool_result_node: {
+                                            tool_use_id: currentToolUse.id,
+                                            content: JSON.stringify(interceptResult.result)
+                                        }
+                                    };
+                                    res.write(JSON.stringify({ text: '', nodes: [toolResultNode], stop_reason: 0 }) + '\n');
+                                } else {
+                                    // 正常工具调用，发送 tool_use 给 Augment
+                                    const toolNode = {
+                                        type: 5,
+                                        tool_use: {
+                                            tool_use_id: currentToolUse.id,
+                                            tool_name: interceptResult ? interceptResult.toolName : currentToolUse.name,
+                                            input_json: JSON.stringify(interceptResult ? interceptResult.input : input)
+                                        }
+                                    };
+                                    const responseData = { text: '', nodes: [toolNode], stop_reason: 0 };
+                                    const responseStr = JSON.stringify(responseData);
+                                    res.write(responseStr + '\n');
+                                    log(`[DEBUG] Tool use complete: ${currentToolUse.name}, id: ${currentToolUse.id}`);
+                                    log(`[DEBUG] Sending tool_use response: ${responseStr.slice(0, 500)}`);
+                                    hasToolUse = true;
+                                }
                             } catch (e) {
                                 log(`[DEBUG] Tool parse error: ${e}`);
                             }

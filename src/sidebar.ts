@@ -186,6 +186,7 @@ button { width: 100%; padding: 8px; margin: 4px 0; cursor: pointer; background: 
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.small { padding: 4px 8px; font-size: 11px; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; }
 .btn-row button { flex: 1; }
 .api-key-row { display: flex; gap: 4px; }
@@ -331,6 +332,8 @@ window.addEventListener('message', e => {
     if (msg.type === 'status') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
+        document.getElementById('startBtn').disabled = msg.proxyRunning;
+        document.getElementById('stopBtn').disabled = !msg.proxyRunning;
     } else if (msg.type === 'embeddingStatus') { updateEmbeddingUI(msg); }
     else if (msg.type === 'contextStatus') {
         const tokenLimit = msg.token_limit || 200000;
@@ -353,6 +356,8 @@ window.addEventListener('message', e => {
     } else if (msg.type === 'fullStatus') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
+        document.getElementById('startBtn').disabled = msg.proxyRunning;
+        document.getElementById('stopBtn').disabled = !msg.proxyRunning;
         currentConfig = msg.config; $provider.value = msg.config.provider; $port.value = msg.config.port;
         const pConfig = msg.config.providers?.[msg.config.provider] || {};
         $baseUrl.value = pConfig.baseUrl || ''; $model.value = pConfig.model || '';
