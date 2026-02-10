@@ -16,7 +16,8 @@ export async function executeOpenAIRequest(
     apiEndpoint: string,
     apiKey: string,
     model: string,
-    onTextDelta?: (delta: string) => void
+    onTextDelta?: (delta: string) => void,
+    responseFormat?: any  // ✅ 新增：支持 JSON Mode
 ): Promise<OpenAIRequestResult> {
     return new Promise((resolve, reject) => {
         const requestBody: any = {
@@ -28,6 +29,11 @@ export async function executeOpenAIRequest(
         if (tools && tools.length > 0) {
             requestBody.tools = tools;
             requestBody.tool_choice = 'auto';
+        }
+        // ✅ 新增：支持 JSON Mode
+        if (responseFormat) {
+            requestBody.response_format = responseFormat;
+            log(`[JSON-MODE] Enabled with format: ${JSON.stringify(responseFormat)}`);
         }
         const apiBody = JSON.stringify(requestBody);
         const url = new URL(apiEndpoint);
@@ -172,10 +178,10 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
     const system = buildSystemPrompt(augmentReq);
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     const rawTools = augmentReq.tool_definitions || [];
-    log(`[DEBUG] tool_definitions count: ${rawTools.length}`);
-
     const tools = convertToolDefinitionsToOpenAI(rawTools);
-    log(`[DEBUG] OpenAI tools: ${tools ? tools.length : 0} definitions`);
+
+    // ✅ 新增：提取 response_format 参数（支持 JSON Mode）
+    const responseFormat = augmentReq.response_format || undefined;
 
     const openaiMessages: any[] = [];
     if (system) {
@@ -183,7 +189,6 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
     }
     const convertedMessages = augmentToOpenAIMessages(augmentReq);
     openaiMessages.push(...convertedMessages);
-    log(`[DEBUG] OpenAI messages: ${openaiMessages.length} total`);
 
     const apiEndpoint = state.currentConfig.baseUrl;
     const apiKey = state.currentConfig.apiKey;
@@ -209,7 +214,8 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
             log(`[LOOP] Iteration ${iteration}/${MAX_ITERATIONS}`);
 
             // 第一轮迭代使用流式回调，后续 RAG 循环也流式输出
-            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model, onTextDelta);
+            // ✅ 新增：传递 responseFormat 参数
+            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model, onTextDelta, responseFormat);
             accumulatedText += result.text;
 
             if (result.toolCalls.length === 0 || result.finishReason === 'stop') {

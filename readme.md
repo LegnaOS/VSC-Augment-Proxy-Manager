@@ -38,6 +38,7 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 | **Google Gemini** | Google 原生 | `gemini-3-pro-preview` |
 | **OpenAI** | 原生 | `gpt-4` |
 | **GLM (智谱)** | OpenAI 兼容 | `GLM-4.7` |
+| **Kimi (月之暗面)** | OpenAI 兼容 | `moonshot-v1-auto` |
 | **自定义** | Anthropic / OpenAI | — |
 
 ## 快速开始
@@ -55,6 +56,8 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 - **完整 Agent 模式** — 工具调用、文件编辑、代码库检索全部正常工作
 - **本地代码索引** — 内置 RAG 语义搜索索引，无需云端同步
 - **思考模式** — 支持 DeepSeek、MiniMax、GLM 的扩展思考 (Thinking)
+- **JSON Mode** — 支持 Kimi API 的结构化 JSON 输出模式
+- **联网搜索** — 支持 Kimi 内置的 `$web_search` 联网搜索功能
 - **Prompt 缓存** — 自动为支持的供应商注入 cache_control
 - **上下文压缩** — 基于 token 使用率的智能对话历史压缩
 - **配置热更新** — 切换供应商或模型无需重启代理，实时生效

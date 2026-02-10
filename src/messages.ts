@@ -398,12 +398,10 @@ export function augmentToOpenAIMessages(req: any) {
                 const assistantMsg: any = { role: 'assistant', tool_calls: toolCalls };
                 if (textContent) assistantMsg.content = textContent;
                 messages.push(assistantMsg);
-                log(`[DEBUG] OpenAI: Added assistant with ${toolCalls.length} tool_calls`);
                 for (const tc of toolCalls) {
                     const tr = toolResultMap.get(tc.id);
                     if (tr) {
                         messages.push({ role: 'tool', tool_call_id: tc.id, content: tr.content || '' });
-                        log(`[DEBUG] OpenAI: Added tool result for ${tc.id}`);
                         toolResultMap.delete(tc.id);
                     }
                 }
@@ -418,7 +416,6 @@ export function augmentToOpenAIMessages(req: any) {
     // 剩余未匹配的 tool_result
     for (const [id, tr] of toolResultMap) {
         messages.push({ role: 'tool', tool_call_id: id, content: tr.content || '' });
-        log(`[DEBUG] OpenAI: Added remaining tool result for ${id}`);
     }
     // 添加当前用户消息
     if (currentMessage && currentMessage !== '...') {

@@ -2,6 +2,27 @@
 
 All notable changes to the Augment Proxy Manager extension will be documented in this file.
 
+## [2.1.0] - 2026-02-10
+
+### ✨ New Features
+- **Kimi (月之暗面) API Support**: Added support for Moonshot AI's Kimi API
+  - OpenAI-compatible API format
+  - Default model: `moonshot-v1-auto`
+  - Default endpoint: `https://api.moonshot.cn/v1/chat/completions`
+- **JSON Mode Support**: Added support for Kimi API's structured JSON output mode
+  - Supports `response_format: {"type": "json_object"}` parameter
+  - Automatically passed through from Augment requests to Kimi API
+  - Enables reliable structured data extraction
+- **Web Search Support**: Added support for Kimi's built-in `$web_search` function
+  - Supports `type: "builtin_function"` tool type
+  - Automatically intercepts and returns arguments to Kimi for execution
+  - Enables AI to perform web searches without custom implementation
+
+### 🐛 Bug Fixes
+- **Debug log cleanup**: Removed excessive debug logging from OpenAI message construction
+- **Tool definition filtering**: Removed `edit-file` from tool definitions sent to AI models to prevent wasted round trips
+- **File editing interruption fix**: Fixed issue where file editing operations would cause conversation to be interrupted instead of continuing
+
 ## [2.0.0] - 2026-02-10
 
 ### 🎉 Major Release - Complete File Editing Overhaul

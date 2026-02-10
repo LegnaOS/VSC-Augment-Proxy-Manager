@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -68,6 +68,7 @@
             "deepseek",
             "openai",
             "google",
+            "kimi",
             "custom"
           ],
           "enumDescriptions": [
@@ -77,6 +78,7 @@
             "DeepSeek",
             "OpenAI (GPT-4)",
             "Google Gemini",
+            "Kimi (月之暗面 Moonshot)",
             "自定义 API"
           ],
           "description": "选择 AI API 供应商"

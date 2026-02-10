@@ -222,6 +222,10 @@ export function convertToolDefinitions(toolDefs: any[]): any[] | undefined {
         return undefined;
     const tools: any[] = [];
     for (const def of toolDefs) {
+        // 跳过 edit-file：proxy 模式下不支持服务端编辑
+        if (def.name === 'edit-file') {
+            continue;
+        }
         if (def.name && def.input_schema_json) {
             try {
                 const inputSchema = typeof def.input_schema_json === 'string'
@@ -284,7 +288,28 @@ export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefin
     }
 
     for (const def of toolDefs) {
+        // 跳过 edit-file：proxy 模式下不支持服务端编辑
+        if (def.name === 'edit-file') {
+            continue;
+        }
         if (def.name) {
+            // ✅ 新增：支持 builtin_function 类型（如 $web_search）
+            const toolType = def.type || 'function';
+            const isBuiltinFunction = toolType === 'builtin_function';
+
+            // builtin_function 不需要 parameters 和 description
+            if (isBuiltinFunction) {
+                tools.push({
+                    type: 'builtin_function',
+                    function: {
+                        name: def.name
+                    }
+                });
+                log(`[BUILTIN] Added builtin_function: ${def.name}`);
+                continue;
+            }
+
+            // 普通 function 需要 parameters
             // ⚠️ 关键修复：Augment 扩展发送的字段名是 input_schema_json（不是 input_json_schema）
             let parameters = def.input_schema_json || def.input_json_schema;
             if (typeof parameters === 'string') {
@@ -317,6 +342,10 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
     const tools: any[] = [];
     for (const def of toolDefs) {
         if (!def.name) continue;
+        // 跳过 edit-file：proxy 模式下不支持服务端编辑
+        if (def.name === 'edit-file') {
+            continue;
+        }
         // ⚠️ 关键修复：Augment 扩展发送的字段名是 input_schema_json
         let parameters = def.input_schema_json || def.input_json_schema || def.input_schema;
         if (typeof parameters === 'string') {
@@ -395,6 +424,18 @@ function findMatchInContent(content: string, oldStr: string, startLine?: number,
 export function convertOrInterceptFileEdit(toolName: string, input: any, workspaceInfo: any): { toolName: string; input: any; intercepted?: boolean; result?: any } | null {
     const fs = require('fs');
     const path = require('path');
+
+    // ========== 拦截 $web_search：原封不动返回 arguments ==========
+    // Kimi 内置的联网搜索工具，需要将 arguments 原封不动返回给 Kimi
+    if (toolName === '$web_search') {
+        log(`[INTERCEPT] $web_search: returning arguments as-is for Kimi to execute`);
+        return {
+            toolName,
+            input,
+            intercepted: true,
+            result: input  // 原封不动返回 arguments
+        };
+    }
 
     // ========== 拦截 str-replace-editor：直接执行文件编辑 ==========
     if (toolName === 'str-replace-editor') {

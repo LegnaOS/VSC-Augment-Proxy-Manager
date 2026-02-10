@@ -155,6 +155,7 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
                                         }
                                     };
                                     res.write(JSON.stringify({ text: '', nodes: [toolResultNode], stop_reason: 0 }) + '\n');
+                                    hasToolUse = true;  // 标记有工具调用，确保 stop_reason=3
                                 } else {
                                     // 正常工具调用，发送 tool_use 给 Augment
                                     const toolNode = {
