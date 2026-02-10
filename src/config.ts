@@ -39,9 +39,9 @@ export const DEFAULT_MODELS: Record<string, string> = {
 };
 
 // 判断是否为 Anthropic 格式
-// DeepSeek 提供 Anthropic 兼容 API
+// DeepSeek 和 Kimi Coding 提供 Anthropic 兼容 API
 export function isAnthropicFormat(provider: string): boolean {
-    return ['anthropic', 'minimax', 'deepseek'].includes(provider);
+    return ['anthropic', 'minimax', 'deepseek', 'kimi-coding'].includes(provider);
 }
 
 // 判断是否为 OpenAI 格式
