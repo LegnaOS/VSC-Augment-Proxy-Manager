@@ -22,7 +22,7 @@ export const DEFAULT_BASE_URLS: Record<string, string> = {
     openai: 'https://api.openai.com/v1/chat/completions',
     google: 'https://generativelanguage.googleapis.com/v1beta/models',
     kimi: 'https://api.moonshot.cn/v1/chat/completions',
-    'kimi-coding': 'https://api.kimi.com/coding/v1/messages',
+    'kimi-coding': 'https://api.kimi.com/coding/messages',
     custom: ''
 };
 
@@ -39,9 +39,9 @@ export const DEFAULT_MODELS: Record<string, string> = {
 };
 
 // 判断是否为 Anthropic 格式
-// DeepSeek 和 Kimi Coding 提供 Anthropic 兼容 API
+// DeepSeek 提供 Anthropic 兼容 API
 export function isAnthropicFormat(provider: string): boolean {
-    return ['anthropic', 'minimax', 'deepseek', 'kimi-coding'].includes(provider);
+    return ['anthropic', 'minimax', 'deepseek'].includes(provider);
 }
 
 // 判断是否为 OpenAI 格式
