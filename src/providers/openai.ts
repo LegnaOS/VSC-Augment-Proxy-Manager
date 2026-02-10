@@ -37,15 +37,24 @@ export async function executeOpenAIRequest(
         }
         const apiBody = JSON.stringify(requestBody);
         const url = new URL(apiEndpoint);
+        const headers: any = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        };
+
+        // Kimi Coding Plan 需要伪装成 Kimi CLI
+        if (state.currentConfig.provider === 'kimi-coding') {
+            headers['User-Agent'] = 'Kimi-CLI/1.0.0';
+            headers['X-Kimi-Client'] = 'cli';
+            headers['X-Kimi-Client-Version'] = '1.0.0';
+        }
+
         const options = {
             hostname: url.hostname,
             port: url.port || 443,
             path: url.pathname,
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            }
+            headers
         };
         log(`[API-EXEC] Sending request to ${apiEndpoint}, messages=${messages.length}`);
         const result: OpenAIRequestResult = { text: '', toolCalls: [], finishReason: null, thinkingContent: '' };
