@@ -31,7 +31,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
     glm: 'glm-4.7',
     openai: 'gpt-4',
     google: 'gemini-3-pro-preview',
-    kimi: 'moonshot-v1-auto',
+    kimi: 'kimi-k2.5',
     custom: ''
 };
 

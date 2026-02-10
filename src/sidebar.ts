@@ -166,7 +166,21 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         return [ { id: 'deepseek-chat', name: 'DeepSeek Chat' }, { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner (思考模式)' } ];
     }
     getKimiModels() {
-        return [ { id: 'kimi-k2-0711', name: 'Kimi K2 (推荐)' }, { id: 'moonshot-v1-auto', name: 'Moonshot V1 Auto' }, { id: 'moonshot-v1-8k', name: 'Moonshot V1 8K' }, { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K' }, { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K' } ];
+        return [
+            { id: 'kimi-k2.5', name: 'Kimi K2.5 (最新多模态，推荐)' },
+            { id: 'kimi-k2-0905-preview', name: 'Kimi K2 0905 Preview' },
+            { id: 'kimi-k2-0711-preview', name: 'Kimi K2 0711 Preview (编码强)' },
+            { id: 'kimi-k2-turbo-preview', name: 'Kimi K2 Turbo Preview' },
+            { id: 'kimi-k2-thinking-turbo', name: 'Kimi K2 Thinking Turbo' },
+            { id: 'kimi-k2-thinking', name: 'Kimi K2 Thinking' },
+            { id: 'moonshot-v1-8k', name: 'Moonshot V1 8K' },
+            { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K' },
+            { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K' },
+            { id: 'moonshot-v1-auto', name: 'Moonshot V1 Auto' },
+            { id: 'moonshot-v1-8k-vision-preview', name: 'Moonshot V1 8K Vision' },
+            { id: 'moonshot-v1-32k-vision-preview', name: 'Moonshot V1 32K Vision' },
+            { id: 'moonshot-v1-128k-vision-preview', name: 'Moonshot V1 128K Vision' }
+        ];
     }
 
     _getHtml() {
