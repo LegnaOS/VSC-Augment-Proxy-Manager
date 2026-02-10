@@ -44,9 +44,7 @@ export async function executeOpenAIRequest(
 
         // Kimi Coding Plan 需要伪装成 Kimi CLI
         if (state.currentConfig.provider === 'kimi-coding') {
-            headers['User-Agent'] = 'Kimi-CLI/1.0.0';
-            headers['X-Kimi-Client'] = 'cli';
-            headers['X-Kimi-Client-Version'] = '1.0.0';
+            headers['User-Agent'] = 'KimiCLI/0.77';
         }
 
         const options = {
