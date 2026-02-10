@@ -295,6 +295,13 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
 
     } catch (error: any) {
         log(`[LOOP ERROR] ${error.message}`);
-        sendAugmentError(res, error.message);
+        try {
+            if (res.headersSent && !res.writableEnded) {
+                res.write(JSON.stringify({ text: `\n\nError: ${error.message}`, nodes: [], stop_reason: 1 }) + '\n');
+                res.end();
+            } else {
+                sendAugmentError(res, error.message);
+            }
+        } catch (e) { /* 连接可能已关闭 */ }
     }
 }

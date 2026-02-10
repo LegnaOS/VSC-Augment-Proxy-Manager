@@ -124,12 +124,18 @@ Example bad behavior (DO NOT DO THIS):
 
 // ===== 发送 Augment 格式错误响应 =====
 export function sendAugmentError(res: any, message: string) {
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-    res.end(JSON.stringify({
-        text: `Error: ${message}`,
-        nodes: [],
-        stop_reason: 0
-    }) + '\n');
+    try {
+        if (!res.headersSent) {
+            res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        }
+        if (!res.writableEnded) {
+            res.end(JSON.stringify({
+                text: `Error: ${message}`,
+                nodes: [],
+                stop_reason: 1
+            }) + '\n');
+        }
+    } catch (e) { /* 连接可能已关闭 */ }
 }
 
 // ===== 将 Augment 请求转换为 Anthropic messages 格式 =====
