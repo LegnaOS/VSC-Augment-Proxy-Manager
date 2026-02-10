@@ -53,16 +53,24 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages, ${cachedTools?.length || 0} tools`);
 
     const url = new URL(state.currentConfig.baseUrl);
+    const headers: any = {
+        'Content-Type': 'application/json',
+        'x-api-key': state.currentConfig.apiKey,
+        'anthropic-version': '2023-06-01'
+    };
+
+    // Kimi Coding Plan 需要伪装成 Kimi CLI
+    if (state.currentConfig.provider === 'kimi-coding') {
+        headers['User-Agent'] = 'KimiCLI/0.77';
+        log(`[KIMI-CODING] Added User-Agent: KimiCLI/0.77`);
+    }
+
     const options = {
         hostname: url.hostname,
         port: url.port || 443,
         path: url.pathname,
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': state.currentConfig.apiKey,
-            'anthropic-version': '2023-06-01'
-        }
+        headers
     };
 
     const apiReq = https.request(options, (apiRes) => {

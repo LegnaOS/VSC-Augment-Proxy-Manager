@@ -76,7 +76,12 @@ export async function executeOpenAIRequest(
                 return;
             }
             apiRes.on('data', (chunk: any) => {
-                buffer += chunk.toString();
+                const chunkStr = chunk.toString();
+                // 🔍 调试：打印原始 chunk
+                if (state.currentConfig.provider === 'kimi-coding') {
+                    log(`[KIMI-CODING-RAW] Chunk: ${chunkStr.slice(0, 200)}`);
+                }
+                buffer += chunkStr;
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
                 for (const line of lines) {
@@ -85,6 +90,10 @@ export async function executeOpenAIRequest(
                         if (!data || data === '[DONE]') continue;
                         try {
                             const event = JSON.parse(data);
+                            // 🔍 调试：打印原始事件
+                            if (state.currentConfig.provider === 'kimi-coding') {
+                                log(`[KIMI-CODING-DEBUG] Event: ${JSON.stringify(event).slice(0, 500)}`);
+                            }
                             const choice = event.choices?.[0];
                             const delta = choice?.delta?.content || '';
                             const reasoningDelta = choice?.delta?.reasoning_content || '';
@@ -134,6 +143,10 @@ export async function executeOpenAIRequest(
                     if (onTextDelta) onTextDelta('\n</think>\n\n');
                 }
                 for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
+                // 🔍 调试：打印最终结果
+                if (state.currentConfig.provider === 'kimi-coding') {
+                    log(`[KIMI-CODING-RESULT] text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}, thinking=${result.thinkingContent.length}`);
+                }
                 log(`[API-EXEC] Complete: text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}`);
                 resolve(result);
             });
