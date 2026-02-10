@@ -3,27 +3,27 @@ import * as vscode from 'vscode';
 import { state, log } from './globals';
 import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS } from './config';
 import { startProxy, stopProxy } from './proxy';
-import { injectPlugin, restorePlugin, checkInjectionStatus } from './injection';
+
 
 export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
     _extensionUri: vscode.Uri;
     _view?: vscode.WebviewView;
     _proxyRunning = false;
-    _injected = false;
     _embeddingStatus: any = null;
+    _lastContextStatus: any = null;
 
     constructor(extensionUri: vscode.Uri) { this._extensionUri = extensionUri; }
 
-    updateStatus(proxyRunning: boolean, injected: boolean) {
+    updateStatus(proxyRunning: boolean) {
         this._proxyRunning = proxyRunning;
-        this._injected = injected;
-        if (this._view) this._view.webview.postMessage({ type: 'status', proxyRunning, injected });
+        if (this._view) this._view.webview.postMessage({ type: 'status', proxyRunning });
     }
     updateEmbeddingStatus(status: any) {
         this._embeddingStatus = status;
         if (this._view) this._view.webview.postMessage({ type: 'embeddingStatus', ...status });
     }
     updateContextStatus(contextStats: any) {
+        this._lastContextStatus = contextStats;
         if (this._view) this._view.webview.postMessage({ type: 'contextStatus', ...contextStats });
     }
 
@@ -35,8 +35,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
             switch (msg.command) {
                 case 'startProxy': await startProxy(state.extensionContext!); break;
                 case 'stopProxy': await stopProxy(); break;
-                case 'inject': await injectPlugin(); break;
-                case 'restore': await restorePlugin(); break;
+
                 case 'refresh': this.sendFullStatus(); break;
                 case 'saveConfig': await this.saveConfig(msg.config); break;
                 case 'setApiKey':
@@ -45,7 +44,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                     break;
                 case 'getConfig': this.sendFullStatus(); break;
                 case 'setCompressionThreshold':
-                    await vscode.workspace.getConfiguration('augmentProxy.google').update('compressionThreshold', msg.threshold, vscode.ConfigurationTarget.Global);
+                    await vscode.workspace.getConfiguration('augmentProxy').update('compressionThreshold', msg.threshold, vscode.ConfigurationTarget.Global);
                     vscode.window.showInformationMessage(`压缩阈值已设置为 ${msg.threshold}%`);
                     break;
                 case 'fetchModels': await this.fetchModels(msg.provider); break;
@@ -79,10 +78,12 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
             };
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
-        configData.compressionThreshold = config.get('google.compressionThreshold', 80);
+        configData.compressionThreshold = config.get('compressionThreshold', 80);
         this._view.webview.postMessage({
-            type: 'fullStatus', proxyRunning: !!state.proxyServer, injected: checkInjectionStatus(),
-            config: configData, embeddingStatus: this._embeddingStatus || { mode: 'local', modelLoading: false, modelReady: false, downloadProgress: 0, cacheCount: 0 }
+            type: 'fullStatus', proxyRunning: !!state.proxyServer,
+            config: configData,
+            embeddingStatus: this._embeddingStatus || { mode: 'local', modelLoading: false, modelReady: false, downloadProgress: 0, cacheCount: 0 },
+            contextStatus: this._lastContextStatus
         });
     }
 
@@ -200,7 +201,6 @@ button.small { padding: 4px 8px; font-size: 11px; }
     <div class="section">
         <div class="title">状态</div>
         <div class="status"><span class="dot" id="proxyDot"></span><span id="proxyStatus">代理: 检查中...</span></div>
-        <div class="status"><span class="dot" id="injectDot"></span><span id="injectStatus">注入: 检查中...</span></div>
     </div>
     <div class="section">
         <div class="title">Provider 配置</div>
@@ -247,11 +247,7 @@ button.small { padding: 4px 8px; font-size: 11px; }
         <div id="contextCompression" style="display:none; font-size: 11px; opacity: 0.8; margin: 4px 0; color: #ff9800;"><span>⚠️ 已压缩</span></div>
         <div class="row" style="margin-top: 8px;"><label>压缩阈值 (%)</label><input type="number" id="compressionThreshold" min="50" max="95" value="80" style="width: 100%;"><div class="info">超过此百分比时自动压缩上下文</div></div>
     </div>
-    <div class="section">
-        <div class="title">插件注入</div>
-        <div class="btn-row"><button id="injectBtn">注入插件</button><button id="restoreBtn" class="secondary">恢复原始</button></div>
-        <div class="info">注入后需重载 VSCode 窗口</div>
-    </div>
+
     <button id="refreshBtn" class="secondary">🔄 刷新状态</button>
 
 <script>
@@ -296,8 +292,6 @@ function updateKeyStatus(hasKey) {
 }
 document.getElementById('startBtn').onclick = () => vscode.postMessage({command:'startProxy'});
 document.getElementById('stopBtn').onclick = () => vscode.postMessage({command:'stopProxy'});
-document.getElementById('injectBtn').onclick = () => vscode.postMessage({command:'inject'});
-document.getElementById('restoreBtn').onclick = () => vscode.postMessage({command:'restore'});
 document.getElementById('refreshBtn').onclick = () => vscode.postMessage({command:'refresh'});
 document.getElementById('saveKeyBtn').onclick = () => {
     const apiKey = $apiKey.value.trim(); if (!apiKey) return;
@@ -337,8 +331,6 @@ window.addEventListener('message', e => {
     if (msg.type === 'status') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
-        document.getElementById('injectDot').className = 'dot ' + (msg.injected ? 'on' : 'off');
-        document.getElementById('injectStatus').textContent = '注入: ' + (msg.injected ? '已注入' : '未注入');
     } else if (msg.type === 'embeddingStatus') { updateEmbeddingUI(msg); }
     else if (msg.type === 'contextStatus') {
         const tokenLimit = msg.token_limit || 200000;
@@ -361,8 +353,6 @@ window.addEventListener('message', e => {
     } else if (msg.type === 'fullStatus') {
         document.getElementById('proxyDot').className = 'dot ' + (msg.proxyRunning ? 'on' : 'off');
         document.getElementById('proxyStatus').textContent = '代理: ' + (msg.proxyRunning ? '运行中' : '已停止');
-        document.getElementById('injectDot').className = 'dot ' + (msg.injected ? 'on' : 'off');
-        document.getElementById('injectStatus').textContent = '注入: ' + (msg.injected ? '已注入' : '未注入');
         currentConfig = msg.config; $provider.value = msg.config.provider; $port.value = msg.config.port;
         const pConfig = msg.config.providers?.[msg.config.provider] || {};
         $baseUrl.value = pConfig.baseUrl || ''; $model.value = pConfig.model || '';
@@ -371,6 +361,18 @@ window.addEventListener('message', e => {
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);
         document.getElementById('compressionThreshold').value = msg.config.compressionThreshold || 80;
+        // 恢复上下文状态
+        if (msg.contextStatus) {
+            const cs = msg.contextStatus;
+            const tokenLimit = cs.token_limit || 200000;
+            const tokenLimitK = tokenLimit >= 1000000 ? (tokenLimit / 1000000).toFixed(1) + 'M' : (tokenLimit / 1000).toFixed(0) + 'K';
+            const estimatedTokens = cs.estimated_tokens || 0; const usagePercent = cs.usage_percentage || 0;
+            let color = '#4caf50'; if (usagePercent > 80) color = '#f44336'; else if (usagePercent > 60) color = '#ff9800';
+            document.getElementById('contextTokens').textContent = estimatedTokens + ' / ' + tokenLimitK + ' (' + usagePercent.toFixed(1) + '%)';
+            document.getElementById('contextBar').style.width = Math.min(usagePercent, 100) + '%';
+            document.getElementById('contextBar').style.background = color;
+            document.getElementById('contextExchanges').textContent = cs.total_exchanges + ' 次交互' + (cs.compressed ? ' (已压缩)' : '');
+        }
     }
 });
 document.getElementById('compressionThreshold').onchange = () => {

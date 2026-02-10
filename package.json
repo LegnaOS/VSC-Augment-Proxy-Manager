@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -53,14 +53,6 @@
       {
         "command": "augmentProxy.showStatus",
         "title": "Augment Proxy: 显示状态"
-      },
-      {
-        "command": "augmentProxy.injectPlugin",
-        "title": "Augment Proxy: 注入插件"
-      },
-      {
-        "command": "augmentProxy.restorePlugin",
-        "title": "Augment Proxy: 恢复原始插件"
       }
     ],
     "configuration": {
@@ -93,6 +85,18 @@
           "type": "number",
           "default": 8765,
           "description": "代理服务器端口"
+        },
+        "augmentProxy.enableContextCompression": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用智能上下文压缩 (基于 token 使用率自动压缩，适用于所有供应商)"
+        },
+        "augmentProxy.compressionThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 50,
+          "maximum": 95,
+          "description": "触发压缩的阈值百分比 (默认 80%，即使用率超过 80% 时触发压缩)"
         },
         "augmentProxy.minimax.baseUrl": {
           "type": "string",
@@ -173,18 +177,7 @@
           "default": "gemini-3-pro-preview",
           "description": "Google Gemini 模型名称 (如 gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206 等)"
         },
-        "augmentProxy.google.enableContextCompression": {
-          "type": "boolean",
-          "default": true,
-          "description": "启用智能上下文压缩 (基于 token 使用率自动压缩)"
-        },
-        "augmentProxy.google.compressionThreshold": {
-          "type": "number",
-          "default": 80,
-          "minimum": 50,
-          "maximum": 95,
-          "description": "触发压缩的阈值百分比 (默认 80%，即使用率超过 80% 时触发压缩)"
-        },
+
         "augmentProxy.custom.baseUrl": {
           "type": "string",
           "default": ""

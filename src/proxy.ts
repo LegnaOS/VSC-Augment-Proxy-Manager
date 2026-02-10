@@ -49,6 +49,9 @@ export function handleProxyRequest(req: any, res: any) {
     else if (urlPath === '/settings/get-tenant-tool-permissions') handleTenantToolPermissions(req, res);
     else if (urlPath === '/search-external-sources') handleSearchExternalSources(req, res);
     else if (urlPath === '/get-implicit-external-sources') handleGetImplicitExternalSources(req, res);
+    else if (urlPath === '/get-credit-info') handleGetCreditInfo(req, res);
+    else if (urlPath === '/subscription-banner') handleSubscriptionBanner(req, res);
+    else if (urlPath === '/generate-conversation-title') handleGenerateConversationTitle(req, res);
     else if (urlPath === '/record-session-events' || urlPath === '/record-user-events'
         || urlPath === '/resolve-completions' || urlPath === '/resolve-edit'
         || urlPath === '/resolve-instruction' || urlPath === '/resolve-smart-paste'
@@ -56,7 +59,11 @@ export function handleProxyRequest(req: any, res: any) {
         || urlPath === '/chat-feedback' || urlPath === '/next-edit-feedback'
         || urlPath === '/record-preference-sample' || urlPath === '/notifications/mark-as-read'
         || urlPath === '/save-chat' || urlPath === '/context-canvas/list'
-        || urlPath === '/resolve-chat-input-completion') {
+        || urlPath === '/resolve-chat-input-completion'
+        || urlPath === '/agents/revoke-tool-access' || urlPath === '/checkpoint-blobs'
+        || urlPath === '/prompt-enhancer' || urlPath === '/token'
+        || urlPath === '/github/is-user-configured' || urlPath === '/github/get-repo'
+        || urlPath === '/github/list-repos' || urlPath === '/github/list-branches') {
         // 日志/反馈/解析 端点 — 返回通用成功响应
         let body = ''; req.on('data', (c: any) => body += c);
         req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: true })); });
@@ -79,36 +86,106 @@ function handleModelConfig(res: any) {
 }
 function handleGetModels(res: any) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    const modelId = "proxy-model";
-    log(`[GET-MODELS] Returning model: ${modelId} (actual: ${state.currentConfig.provider}/${state.currentConfig.model})`);
+    // 模型定义 — 所有请求最终都通过代理转发到用户配置的实际 provider
+    // 这里的 ID 只是展示用，不影响实际路由
+    const defaultModelId = "claude-opus-4-6";
+    const models = [
+        { id: "claude-opus-4-6",    name: "Claude Opus 4.6",  desc: "Best for complex tasks",    shortName: "opus",    priority: 1 },
+        { id: "claude-sonnet-4-5",  name: "Sonnet 4.5",       desc: "Great for everyday tasks",  shortName: "sonnet",  priority: 2 },
+        { id: "gpt-5-1",           name: "GPT-5.1",          desc: "",                          shortName: "gpt51",   priority: 3 },
+        { id: "gpt-5-2",           name: "GPT-5.2",          desc: "",                          shortName: "gpt52",   priority: 4 },
+        { id: "claude-haiku-4-5",   name: "Haiku 4.5",        desc: "",                          shortName: "haiku",   priority: 5 },
+    ];
+    log(`[GET-MODELS] Returning ${models.length} models, default: ${defaultModelId} (actual: ${state.currentConfig.provider}/${state.currentConfig.model})`);
+
+    // additionalChatModels: JSON string — 聊天模型选择器下拉项 {displayName: modelId}
+    const additionalChatModels: Record<string, string> = {};
+    for (const m of models) { additionalChatModels[m.name] = m.id; }
+
+    // modelInfoRegistry: JSON string — 模型元数据 {modelId: {displayName, shortName, description, priority}}
+    const modelInfoRegistry: Record<string, any> = {};
+    for (const m of models) {
+        modelInfoRegistry[m.id] = { displayName: m.name, shortName: m.shortName, description: m.desc, priority: m.priority };
+    }
+
+    // modelRegistry: JSON string — 简单 ID→显示名映射 (fallback)
+    const modelRegistry: Record<string, string> = {};
+    for (const m of models) { modelRegistry[m.id] = m.name; }
+
     // 完整的 get-models 响应 — 匹配 Augment 扩展 toGetModelsResult 解析器所需的所有字段
+    // 版本门控: hs(minVersion) 当 minVersion="" 返回 false(禁用)，minVersion="0.0.0" 时 VSCode 版本 >= 0.0.0 始终为 true(启用)
     res.end(JSON.stringify({
-        default_model: modelId,
-        models: [{
-            name: modelId,
-            internal_name: modelId,
+        default_model: defaultModelId,
+        models: models.map(m => ({
+            name: m.id,
+            internal_name: m.id,
             suggested_prefix_char_count: 10000,
             suggested_suffix_char_count: 3000,
             completion_timeout_ms: 30000
-        }],
+        })),
         feature_flags: {
-            enableCompletions: true,
+            // === 基础功能 (bool) ===
             enableChat: true,
             enableInstructions: true,
             enableSmartPaste: true,
-            enableNextEdit: false,
             enableHindsight: false,
             enableSentry: false,
             enableCompletionFileEditEvents: false,
-            maxUploadSizeBytes: 1048576,
             enableCommitIndexing: false,
-            vscodeNextEditMinVersion: "99.99.99",
-            vscodeBackgroundAgentsMinVersion: "0.0.0",
-            agentChatModel: modelId,
             fraudSignEndpoints: false,
-            notificationPollingIntervalMs: 0
+            // === 数值 (int64) ===
+            maxUploadSizeBytes: 1048576,
+            notificationPollingIntervalMs: 0,
+            // === 版本门控 (string) — "0.0.0" 让 hs() 始终通过 ===
+            vscodeAgentModeMinVersion: "0.0.0",
+            vscodeAgentModeMinStableVersion: "0.0.0",
+            vscodeChatWithToolsMinVersion: "0.0.0",
+            vscodeChatMultimodalMinVersion: "0.0.0",
+            vscodeBackgroundAgentsMinVersion: "0.0.0",
+            vscodeSupportToolUseStartMinVersion: "0.0.0",
+            vscodeChatStablePrefixTruncationMinVersion: "0.0.0",
+            historySummaryMinVersion: "0.0.0",
+            vscodePersonalitiesMinVersion: "0.0.0",
+            vscodeTaskListMinVersion: "0.0.0",
+            useCheckpointManagerContextMinVersion: "0.0.0",
+            vscodeNextEditMinVersion: "99.99.99",
+            vscodeDesignSystemRichTextEditorMinVersion: "0.0.0",
+            vscodeShowThinkingSummaryMinVersion: "0.0.0",
+            // === Agent 工具配置 ===
+            agentChatModel: defaultModelId,                             // string — getModelName() 用这个解析显示名
+            vscodeAgentEditTool: "backend_edit_tool",                   // string
+            agentEditToolSchemaType: "StrReplaceEditorToolDefinitionNested", // string
+            agentEditToolEnableFuzzyMatching: false,                    // bool
+            agentEditToolShowResultSnippet: true,                       // bool
+            agentEditToolMaxLines: 200,                                 // int64
+            agentEditToolInstructionsReminder: false,                   // bool
+            agentSaveFileToolInstructionsReminder: false,               // bool
+            // === Agent Auto Mode (bool, protobuf field 130) ===
+            enableAgentAutoMode: true,
+            // === 工具开关 (bool) ===
+            enableGroupedTools: true,
+            grepSearchToolEnable: true,
+            enableApplyPatchTool: true,
+            // === 工具参数 (int64) ===
+            grepSearchToolTimelimitSec: 10,
+            grepSearchToolOutputCharsLimit: 5000,
+            // === Rules / Guidelines / Custom Commands / Canvas (bool) ===
+            enableSharedGuidelines: true,
+            enableCustomCommands: true,
+            enableContextCanvas: false,
+            enableRules: true,
+            enableGuidelines: true,
+            enableHierarchicalRules: true,
+            // === MCP / 权限 (bool) ===
+            allowClientFeatureFlagOverrides: true,
+            enableTenantLevelToolPermissions: true,
+            // === 模型注册表 — protobuf 字段 110/182/9 类型是 string！===
+            // cQn 转换器 Jfe = JSON.parse 会在 protobuf 解析后将这些 string → object
+            modelRegistry: JSON.stringify(modelRegistry),
+            modelInfoRegistry: JSON.stringify(modelInfoRegistry),
+            additionalChatModels: JSON.stringify(additionalChatModels)
         },
-        user_tier: "pro",
+        user_tier: "enterprise",
         user: {
             id: "proxy-user",
             email: "proxy@augmentcode.com",
@@ -117,6 +194,24 @@ function handleGetModels(res: any) {
         },
         bootstrap_settings: {}
     }));
+}
+function handleGetCreditInfo(req: any, res: any) {
+    let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ usage_units_remaining: 999999, is_credit_balance_low: false, display_info: { usage_unit_display_name: "credits", usage_limit: 999999, usage_used: 0 } }));
+    });
+}
+function handleSubscriptionBanner(req: any, res: any) {
+    let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({}));
+    });
+}
+function handleGenerateConversationTitle(req: any, res: any) {
+    let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ title: "Chat" }));
+    });
 }
 function handleChatInputCompletion(req: any, res: any) {
     let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => {
@@ -433,19 +528,28 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
             // QIe.requestAuthToken 直接返回 { token, tenantId, tenantUrl, expiresAt }
             // NJe() 从 proxy.localhost 提取 "proxy" 作为 tenant ID
             // 扩展的 config change listener 检测到变化后自动 reload
+            // 零注入登录绕过：写入 augment.advanced 对象（VSCode 不支持点号路径写入嵌套 object 属性）
             try {
                 const proxyUrl = `http://proxy.localhost:${state.currentConfig.port}`;
                 const augmentConfig = vscode.workspace.getConfiguration('augment');
-                await augmentConfig.update('advanced.apiToken', 'PROXY-TOKEN', vscode.ConfigurationTarget.Global);
-                await augmentConfig.update('advanced.completionURL', proxyUrl, vscode.ConfigurationTarget.Global);
+                const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
+                const currentToken = currentAdvanced.apiToken || '';
+                const currentUrl = currentAdvanced.completionURL || '';
+                const newAdvanced = { ...currentAdvanced, apiToken: 'PROXY-TOKEN', completionURL: proxyUrl };
+                await augmentConfig.update('advanced', newAdvanced, vscode.ConfigurationTarget.Global);
                 log(`[AUTO-CONFIG] ✅ Augment 扩展已自动配置`);
-                log(`[AUTO-CONFIG] apiToken = PROXY-TOKEN (扩展内部会 toUpperCase)`);
                 log(`[AUTO-CONFIG] completionURL = ${proxyUrl}`);
-                log(`[AUTO-CONFIG] 扩展将自动 reload 进入 API Token 模式，无需登录`);
+                // 首次配置或配置变更时需要重载窗口让 Augment 扩展重新初始化
+                const needReload = !currentToken || !currentUrl || !currentUrl.includes('proxy.localhost');
+                if (needReload) {
+                    log(`[AUTO-CONFIG] 首次配置，需要重载窗口让 Augment 扩展进入 API Token 模式`);
+                    extensionContext.globalState.update('proxyAutoStart', true);
+                    setTimeout(() => {
+                        vscode.commands.executeCommand('workbench.action.reloadWindow');
+                    }, 500);
+                }
             } catch (e: any) {
                 log(`[AUTO-CONFIG] ⚠️ 自动配置失败: ${e.message}`);
-                log(`[AUTO-CONFIG] 请手动设置: augment.advanced.apiToken = 任意非空字符串`);
-                log(`[AUTO-CONFIG] 请手动设置: augment.advanced.completionURL = http://proxy.localhost:${state.currentConfig.port}`);
             }
         });
         state.proxyServer.on('error', (err: any) => { log(`[ERROR] ${err.message}`); vscode.window.showErrorMessage(`代理服务器错误: ${err.message}`); });
@@ -453,14 +557,48 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(`代理服务器已启动 - ${PROVIDER_NAMES[state.currentConfig.provider]} (端口: ${state.currentConfig.port})`);
     } catch (error: any) { vscode.window.showErrorMessage(`启动代理失败: ${error.message}`); }
 }
+// ========== 配置热更新 ==========
+export async function refreshConfig() {
+    if (!state.proxyServer) return; // 代理未运行时无需刷新
+    const config = vscode.workspace.getConfiguration('augmentProxy');
+    const newProvider = config.get('provider', 'anthropic') as string;
+    const oldProvider = state.currentConfig.provider;
+    state.currentConfig.provider = newProvider;
+    state.currentConfig.port = config.get('port', 8765);
+    state.currentConfig.baseUrl = config.get(`${newProvider}.baseUrl`, DEFAULT_BASE_URLS[newProvider]);
+    state.currentConfig.model = config.get(`${newProvider}.model`, DEFAULT_MODELS[newProvider]);
+    if (newProvider === 'minimax') {
+        state.currentConfig.enableCache = config.get('minimax.enableCache', true);
+        state.currentConfig.enableInterleavedThinking = config.get('minimax.enableInterleavedThinking', true);
+    }
+    if (newProvider === 'deepseek') {
+        state.currentConfig.enableThinking = config.get('deepseek.enableThinking', true);
+    }
+    // Provider 切换时重新读取 API Key
+    if (newProvider !== oldProvider && state.extensionContext) {
+        const storedKey = await state.extensionContext.secrets.get(`apiKey.${newProvider}`);
+        if (storedKey) {
+            state.currentConfig.apiKey = storedKey;
+        } else {
+            log(`[CONFIG] ⚠️ 切换到 ${PROVIDER_NAMES[newProvider]} 但未找到已保存的 API Key`);
+        }
+    }
+    log(`[CONFIG] 🔄 配置已热更新: ${PROVIDER_NAMES[newProvider]} / ${state.currentConfig.model}`);
+    updateStatusBar(true);
+    if (state.sidebarProvider) state.sidebarProvider.sendFullStatus();
+}
+
 export async function stopProxy() {
     if (!state.proxyServer) { vscode.window.showWarningMessage('代理服务器未运行'); return; }
     state.proxyServer.close(); state.proxyServer = null;
+    // 清除 autoStart flag
+    state.extensionContext?.globalState.update('proxyAutoStart', false);
     // 清除 Augment 扩展的自动配置 — 扩展将 reload 回 OAuth 模式
     try {
         const augmentConfig = vscode.workspace.getConfiguration('augment');
-        await augmentConfig.update('advanced.apiToken', undefined, vscode.ConfigurationTarget.Global);
-        await augmentConfig.update('advanced.completionURL', undefined, vscode.ConfigurationTarget.Global);
+        const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
+        const cleanAdvanced = { ...currentAdvanced, apiToken: '', completionURL: '' };
+        await augmentConfig.update('advanced', cleanAdvanced, vscode.ConfigurationTarget.Global);
         log(`[AUTO-CONFIG] ✅ 已清除 Augment 扩展代理配置`);
     } catch (e: any) { log(`[AUTO-CONFIG] ⚠️ 清除配置失败: ${e.message}`); }
     updateStatusBar(false);
@@ -491,5 +629,5 @@ export function updateStatusBar(proxyRunning: boolean) {
         ? `代理: 运行中 | 端口: ${state.currentConfig.port} | 零注入模式`
         : '代理: 已停止';
     state.statusBarItem.backgroundColor = proxyRunning ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    if (state.sidebarProvider) state.sidebarProvider.updateStatus(proxyRunning, proxyRunning);
+    if (state.sidebarProvider) state.sidebarProvider.updateStatus(proxyRunning);
 }

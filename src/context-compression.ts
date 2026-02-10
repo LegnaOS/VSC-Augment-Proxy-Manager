@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { state, log } from './globals';
 
 export async function applyContextCompression(augmentReq: any, providerName: string = 'unknown') {
-    const config = vscode.workspace.getConfiguration('augmentProxy.google');
+    const config = vscode.workspace.getConfiguration('augmentProxy');
     const enableCompression = config.get('enableContextCompression', true) as boolean;
     const compressionThresholdPercent = config.get('compressionThreshold', 80) as number;
     const compressionThreshold = compressionThresholdPercent / 100;
