@@ -725,6 +725,9 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
         }
 
         try {
+            // 先输出原始 patch 内容的前 500 字符用于调试
+            log(`[DEBUG] apply_patch raw input (first 500 chars):\n${patchInput.substring(0, 500)}`);
+
             const parsedPatches = parsePatchInput(patchInput);
 
             if (parsedPatches.length === 0) {
