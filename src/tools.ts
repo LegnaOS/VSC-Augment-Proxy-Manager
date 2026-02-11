@@ -729,6 +729,9 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
             const results: string[] = [];
             for (const patch of parsedPatches) {
                 log(`[INTERCEPT] apply_patch: applying patch to ${patch.filePath}`);
+                log(`[DEBUG] apply_patch oldContent (${patch.oldContent.length} chars):\n${patch.oldContent.substring(0, 200)}...`);
+                log(`[DEBUG] apply_patch newContent (${patch.newContent.length} chars):\n${patch.newContent.substring(0, 200)}...`);
+                log(`[DEBUG] apply_patch startLine=${patch.startLine}, endLine=${patch.endLine}`);
 
                 const strReplaceInput = {
                     path: patch.filePath,
