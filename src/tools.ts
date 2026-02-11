@@ -59,37 +59,52 @@ function parsePatchInput(patchInput: string): ParsedPatch[] {
     return patches;
 }
 
-// ========== 解析 Augment 自定义格式 ==========
+// ========== 解析 Augment V4A diff 格式 ==========
+// 格式：
+// *** [ACTION] File: path/to/file
+// @@ class/function context (可选)
+// [3 lines context]
+// - old line
+// + new line
+// [3 lines context]
 function parseAugmentPatch(lines: string[], startIndex: number, filePath: string): (ParsedPatch & { nextIndex: number }) | null {
     const oldLines: string[] = [];
     const newLines: string[] = [];
     let i = startIndex;
-    let minLine = Infinity;
-    let maxLine = -Infinity;
 
     while (i < lines.length) {
         const line = lines[i];
 
         // 遇到下一个文件或 patch 结束
-        if (line.startsWith('***') || line.startsWith('---') || line.startsWith('diff --git')) {
+        if (line.startsWith('*** ') && (line.includes('File:') || line.includes('End Patch'))) {
             break;
         }
 
+        // @@ 开头的是上下文定位符，不是实际代码
         if (line.startsWith('@@')) {
-            // 上下文行（保持不变）
-            const contextLine = line.substring(2);
-            oldLines.push(contextLine);
-            newLines.push(contextLine);
-        } else if (line.startsWith('-')) {
-            // 删除的行
+            // 跳过上下文定位符
+            i++;
+            continue;
+        }
+
+        // - 开头：删除的行（只在 oldContent 中）
+        if (line.startsWith('- ') || line.startsWith('-\t')) {
             oldLines.push(line.substring(1));
-        } else if (line.startsWith('+')) {
-            // 添加的行
+            i++;
+            continue;
+        }
+
+        // + 开头：添加的行（只在 newContent 中）
+        if (line.startsWith('+ ') || line.startsWith('+\t')) {
             newLines.push(line.substring(1));
-        } else if (line.trim() === '' && (oldLines.length > 0 || newLines.length > 0)) {
-            // 空行
-            oldLines.push('');
-            newLines.push('');
+            i++;
+            continue;
+        }
+
+        // 其他行：上下文行（在 oldContent 和 newContent 中都有）
+        if (line.trim() !== '' || (oldLines.length > 0 || newLines.length > 0)) {
+            oldLines.push(line);
+            newLines.push(line);
         }
 
         i++;
@@ -103,8 +118,6 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
         filePath,
         oldContent: oldLines.join('\n'),
         newContent: newLines.join('\n'),
-        startLine: minLine !== Infinity ? minLine : undefined,
-        endLine: maxLine !== -Infinity ? maxLine : undefined,
         nextIndex: i
     };
 }
