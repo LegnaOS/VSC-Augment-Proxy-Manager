@@ -60,6 +60,10 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         if (config.provider && config.baseUrl !== undefined) await vscodeConfig.update(`${config.provider}.baseUrl`, config.baseUrl, vscode.ConfigurationTarget.Global);
         if (config.provider && config.model !== undefined) await vscodeConfig.update(`${config.provider}.model`, config.model, vscode.ConfigurationTarget.Global);
         if (config.provider === 'custom' && config.format) await vscodeConfig.update('custom.format', config.format, vscode.ConfigurationTarget.Global);
+        // 保存 thinking 设置
+        if (config.provider && config.enableThinking !== undefined) {
+            await vscodeConfig.update(`${config.provider}.enableThinking`, config.enableThinking, vscode.ConfigurationTarget.Global);
+        }
         vscode.window.showInformationMessage('配置已保存');
         this.sendFullStatus();
     }
@@ -74,7 +78,8 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                 name: PROVIDER_NAMES[p],
                 baseUrl: config.get(`${p}.baseUrl`, DEFAULT_BASE_URLS[p]),
                 model: config.get(`${p}.model`, DEFAULT_MODELS[p]),
-                hasApiKey: !!(await state.extensionContext!.secrets.get(`apiKey.${p}`))
+                hasApiKey: !!(await state.extensionContext!.secrets.get(`apiKey.${p}`)),
+                enableThinking: config.get(`${p}.enableThinking`, false)
             };
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
@@ -101,7 +106,6 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                 case 'deepseek': models = this.getDeepseekModels(); break;
                 case 'glm': models = await this.fetchGLMModels(apiKey); break;
                 case 'kimi': models = this.getKimiModels(); break;
-                case 'kimi-coding': models = this.getKimiModels(); break;
                 case 'kimi-anthropic': models = this.getKimiModels(); break;
                 default: models = [];
             }
@@ -216,6 +220,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .key-status.saved { color: #4caf50; }
 .key-status.missing { color: #ff9800; }
 .info { font-size: 11px; opacity: 0.7; margin-top: 4px; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
+.checkbox-row label { margin: 0; opacity: 1; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -226,7 +233,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="section">
         <div class="title">Provider 配置</div>
         <div class="row"><label>选择 Provider</label>
-            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="kimi">Kimi (月之暗面)</option><option value="kimi-coding">Kimi Coding Plan (OpenAI)</option><option value="kimi-anthropic">Kimi Coding Plan (Anthropic)</option><option value="custom">自定义</option></select>
+            <select id="provider"><option value="minimax">MiniMax</option><option value="anthropic">Anthropic (Claude)</option><option value="deepseek">DeepSeek</option><option value="glm">GLM (智谱)</option><option value="openai">OpenAI</option><option value="google">Google Gemini</option><option value="kimi">Kimi (月之暗面)</option><option value="kimi-anthropic">Kimi Coding Plan (编码套餐)</option><option value="custom">自定义</option></select>
         </div>
         <div class="row"><label>API Key</label>
             <div class="api-key-row"><input type="password" id="apiKey" placeholder="sk-..."><button class="small" id="saveKeyBtn">保存</button></div>
@@ -244,6 +251,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <div class="row" id="formatRow" style="display:none"><label>API 格式 (自定义)</label>
             <select id="format"><option value="anthropic">Anthropic 格式</option><option value="openai">OpenAI 格式</option></select>
         </div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="enableThinking">
+            <label for="enableThinking">启用 Thinking (思考模式)</label>
+        </div>
+        <div class="info" style="margin-top: -4px; margin-left: 24px;">支持 MiniMax, DeepSeek, Kimi Coding 等模型的思考输出</div>
         <div class="row"><label>代理端口</label><input type="number" id="port" value="8765" min="1024" max="65535"></div>
         <button id="saveConfigBtn">保存配置</button>
     </div>
@@ -286,6 +298,7 @@ const $format = document.getElementById('format');
 const $formatRow = document.getElementById('formatRow');
 const $port = document.getElementById('port');
 const $keyStatus = document.getElementById('keyStatus');
+const $enableThinking = document.getElementById('enableThinking');
 
 $provider.onchange = () => {
     const p = $provider.value;
@@ -294,6 +307,7 @@ $provider.onchange = () => {
     $model.value = pConfig.model || '';
     $formatRow.style.display = p === 'custom' ? 'block' : 'none';
     if (p === 'custom') $format.value = pConfig.format || 'anthropic';
+    $enableThinking.checked = pConfig.enableThinking || false;
     updateKeyStatus(pConfig.hasApiKey);
     $apiKey.value = '';
     $modelSelect.innerHTML = '<option value="">-- 选择模型 --</option>';
@@ -320,7 +334,14 @@ document.getElementById('saveKeyBtn').onclick = () => {
     $apiKey.value = ''; updateKeyStatus(true);
 };
 document.getElementById('saveConfigBtn').onclick = () => {
-    vscode.postMessage({ command: 'saveConfig', config: { provider: $provider.value, baseUrl: $baseUrl.value, model: $model.value, port: $port.value, format: $format.value } });
+    vscode.postMessage({ command: 'saveConfig', config: {
+        provider: $provider.value,
+        baseUrl: $baseUrl.value,
+        model: $model.value,
+        port: $port.value,
+        format: $format.value,
+        enableThinking: $enableThinking.checked
+    } });
 };
 function updateEmbeddingUI(status) {
     const dot = document.getElementById('embeddingDot');
@@ -383,6 +404,7 @@ window.addEventListener('message', e => {
         $baseUrl.value = pConfig.baseUrl || ''; $model.value = pConfig.model || '';
         $formatRow.style.display = msg.config.provider === 'custom' ? 'block' : 'none';
         if (msg.config.provider === 'custom') $format.value = pConfig.format || 'anthropic';
+        $enableThinking.checked = pConfig.enableThinking || false;
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);
         document.getElementById('compressionThreshold').value = msg.config.compressionThreshold || 80;

@@ -109,16 +109,28 @@ export async function executeOpenAIRequest(
                                 result.thinkingContent += reasoningDelta;
                                 if (onTextDelta) onTextDelta(reasoningDelta);
                             }
-                            if (delta) {
+                            // 如果有 content（即使是空字符串），也要关闭 thinking
+                            if ('content' in (choice?.delta || {})) {
                                 if (inThinking) {
                                     inThinking = false;
                                     result.text += '\n</think>\n\n';
                                     if (onTextDelta) onTextDelta('\n</think>\n\n');
                                 }
-                                result.text += delta;
-                                if (onTextDelta) onTextDelta(delta);
+                                if (delta) {  // 只有非空才添加
+                                    result.text += delta;
+                                    if (onTextDelta) onTextDelta(delta);
+                                }
                             }
                             if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
+                                // 如果有 tool calls，也要关闭 thinking
+                                if (inThinking) {
+                                    inThinking = false;
+                                    result.text += '\n</think>\n\n';
+                                    if (onTextDelta) onTextDelta('\n</think>\n\n');
+                                }
+                                if (state.currentConfig.provider === 'kimi-coding') {
+                                    log(`[KIMI-CODING-TOOLS] Received ${toolCallsDelta.length} tool calls`);
+                                }
                                 for (const tc of toolCallsDelta) {
                                     const idx = tc.index ?? 0;
                                     if (!toolCallsMap.has(idx)) {
@@ -131,6 +143,9 @@ export async function executeOpenAIRequest(
                                     if (argsValue !== undefined && argsValue !== null) {
                                         st.arguments += typeof argsValue === 'object' ? JSON.stringify(argsValue) : argsValue;
                                     }
+                                    if (state.currentConfig.provider === 'kimi-coding') {
+                                        log(`[KIMI-CODING-TOOLS] Tool ${idx}: id=${st.id}, name=${st.name}, args=${st.arguments.length} chars`);
+                                    }
                                 }
                             }
                         } catch (e) { }
@@ -141,6 +156,9 @@ export async function executeOpenAIRequest(
                 if (inThinking) {
                     result.text += '\n</think>\n\n';
                     if (onTextDelta) onTextDelta('\n</think>\n\n');
+                }
+                if (state.currentConfig.provider === 'kimi-coding') {
+                    log(`[KIMI-CODING-MAP] toolCallsMap size: ${toolCallsMap.size}`);
                 }
                 for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
                 // 🔍 调试：打印最终结果

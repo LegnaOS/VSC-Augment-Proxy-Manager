@@ -69,7 +69,6 @@
             "openai",
             "google",
             "kimi",
-            "kimi-coding",
             "kimi-anthropic",
             "custom"
           ],
@@ -81,8 +80,7 @@
             "OpenAI (GPT-4)",
             "Google Gemini",
             "Kimi (月之暗面 Moonshot)",
-            "Kimi Coding Plan (编码套餐 OpenAI 格式)",
-            "Kimi Coding Plan (编码套餐 Anthropic 格式)",
+            "Kimi Coding Plan (编码套餐)",
             "自定义 API"
           ],
           "description": "选择 AI API 供应商"
@@ -130,6 +128,11 @@
           "type": "string",
           "default": "claude-sonnet-4-20250514"
         },
+        "augmentProxy.anthropic.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Extended Thinking (Claude 扩展思考模式)"
+        },
         "augmentProxy.deepseek.baseUrl": {
           "type": "string",
           "default": "https://api.deepseek.com/anthropic/v1/messages",
@@ -173,6 +176,11 @@
           "type": "string",
           "default": "gpt-4"
         },
+        "augmentProxy.openai.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Reasoning (OpenAI o1/o3 推理模式)"
+        },
         "augmentProxy.google.baseUrl": {
           "type": "string",
           "default": "https://generativelanguage.googleapis.com/v1beta/models",
@@ -183,7 +191,41 @@
           "default": "gemini-3-pro-preview",
           "description": "Google Gemini 模型名称 (如 gemini-3-pro-preview, gemini-2.0-flash-exp, gemini-exp-1206 等)"
         },
-
+        "augmentProxy.google.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Thinking (Gemini 思考模式)"
+        },
+        "augmentProxy.kimi.baseUrl": {
+          "type": "string",
+          "default": "https://api.moonshot.cn/v1/chat/completions",
+          "description": "Kimi (月之暗面) API 地址"
+        },
+        "augmentProxy.kimi.model": {
+          "type": "string",
+          "default": "kimi-k2.5",
+          "description": "Kimi 模型名称 (如 kimi-k2.5, kimi-k2-thinking 等)"
+        },
+        "augmentProxy.kimi.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Thinking (Kimi K2 Thinking 模式)"
+        },
+        "augmentProxy.kimi-anthropic.baseUrl": {
+          "type": "string",
+          "default": "https://api.kimi.com/coding/v1/messages",
+          "description": "Kimi Coding Plan API 地址"
+        },
+        "augmentProxy.kimi-anthropic.model": {
+          "type": "string",
+          "default": "kimi-for-coding",
+          "description": "Kimi Coding Plan 模型名称"
+        },
+        "augmentProxy.kimi-anthropic.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Thinking (Kimi Coding Plan 思考模式，可能导致 tool calls 失败)"
+        },
         "augmentProxy.custom.baseUrl": {
           "type": "string",
           "default": ""
@@ -199,6 +241,11 @@
             "anthropic",
             "openai"
           ]
+        },
+        "augmentProxy.custom.enableThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 Thinking (自定义 API 思考模式)"
         },
         "augmentProxy.embedding.enabled": {
           "type": "boolean",

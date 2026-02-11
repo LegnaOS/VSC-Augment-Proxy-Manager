@@ -2,6 +2,265 @@
 
 import { state, log } from './globals';
 
+// ========== Patch 解析器类型定义 ==========
+interface ParsedPatch {
+    filePath: string;
+    oldContent: string;
+    newContent: string;
+    startLine?: number;
+    endLine?: number;
+}
+
+interface Hunk {
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: string[];
+}
+
+// ========== 完整的 Unified Diff 解析器 ==========
+function parsePatchInput(patchInput: string): ParsedPatch[] {
+    const patches: ParsedPatch[] = [];
+    const lines = patchInput.split('\n');
+    let i = 0;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // 检测 Augment 自定义格式：*** Update File: xxx
+        if (line.startsWith('*** Update File:') || line.startsWith('*** Create File:')) {
+            const filePath = line.split(':')[1]?.trim() || '';
+            i++;
+
+            const patch = parseAugmentPatch(lines, i, filePath);
+            if (patch) {
+                patches.push(patch);
+                i = patch.nextIndex;
+            }
+            continue;
+        }
+
+        // 检测标准 unified diff 格式：--- a/file 或 diff --git
+        if (line.startsWith('--- ') || line.startsWith('diff --git')) {
+            const patch = parseUnifiedDiff(lines, i);
+            if (patch) {
+                patches.push(patch.patch);
+                i = patch.nextIndex;
+            } else {
+                i++;
+            }
+            continue;
+        }
+
+        i++;
+    }
+
+    return patches;
+}
+
+// ========== 解析 Augment 自定义格式 ==========
+function parseAugmentPatch(lines: string[], startIndex: number, filePath: string): (ParsedPatch & { nextIndex: number }) | null {
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    let i = startIndex;
+    let minLine = Infinity;
+    let maxLine = -Infinity;
+
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // 遇到下一个文件或 patch 结束
+        if (line.startsWith('***') || line.startsWith('---') || line.startsWith('diff --git')) {
+            break;
+        }
+
+        if (line.startsWith('@@')) {
+            // 上下文行（保持不变）
+            const contextLine = line.substring(2);
+            oldLines.push(contextLine);
+            newLines.push(contextLine);
+        } else if (line.startsWith('-')) {
+            // 删除的行
+            oldLines.push(line.substring(1));
+        } else if (line.startsWith('+')) {
+            // 添加的行
+            newLines.push(line.substring(1));
+        } else if (line.trim() === '' && (oldLines.length > 0 || newLines.length > 0)) {
+            // 空行
+            oldLines.push('');
+            newLines.push('');
+        }
+
+        i++;
+    }
+
+    if (oldLines.length === 0 && newLines.length === 0) {
+        return null;
+    }
+
+    return {
+        filePath,
+        oldContent: oldLines.join('\n'),
+        newContent: newLines.join('\n'),
+        startLine: minLine !== Infinity ? minLine : undefined,
+        endLine: maxLine !== -Infinity ? maxLine : undefined,
+        nextIndex: i
+    };
+}
+
+// ========== 解析标准 Unified Diff 格式 ==========
+function parseUnifiedDiff(lines: string[], startIndex: number): { patch: ParsedPatch; nextIndex: number } | null {
+    let i = startIndex;
+    let filePath = '';
+
+    // 解析文件头
+    if (lines[i].startsWith('diff --git')) {
+        // diff --git a/file.js b/file.js
+        const match = lines[i].match(/diff --git a\/(.+?) b\//);
+        if (match) {
+            filePath = match[1];
+        }
+        i++;
+    }
+
+    // 跳过 index, new file mode 等行
+    while (i < lines.length && !lines[i].startsWith('---')) {
+        i++;
+    }
+
+    // --- a/file.js
+    if (i < lines.length && lines[i].startsWith('---')) {
+        if (!filePath) {
+            const match = lines[i].match(/^--- (?:a\/)?(.+?)$/);
+            if (match) {
+                filePath = match[1];
+            }
+        }
+        i++;
+    }
+
+    // +++ b/file.js
+    if (i < lines.length && lines[i].startsWith('+++')) {
+        i++;
+    }
+
+    if (!filePath) {
+        return null;
+    }
+
+    // 解析所有 hunks
+    const hunks: Hunk[] = [];
+    while (i < lines.length && lines[i].startsWith('@@')) {
+        const hunk = parseHunk(lines, i);
+        if (hunk) {
+            hunks.push(hunk.hunk);
+            i = hunk.nextIndex;
+        } else {
+            break;
+        }
+    }
+
+    if (hunks.length === 0) {
+        return null;
+    }
+
+    // 合并所有 hunks 为一个 patch
+    const { oldContent, newContent, startLine, endLine } = mergeHunks(hunks);
+
+    return {
+        patch: {
+            filePath,
+            oldContent,
+            newContent,
+            startLine,
+            endLine
+        },
+        nextIndex: i
+    };
+}
+
+// ========== 解析单个 Hunk ==========
+function parseHunk(lines: string[], startIndex: number): { hunk: Hunk; nextIndex: number } | null {
+    const line = lines[startIndex];
+
+    // @@ -10,5 +10,7 @@ optional context
+    const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (!match) {
+        return null;
+    }
+
+    const oldStart = parseInt(match[1], 10);
+    const oldLines = match[2] ? parseInt(match[2], 10) : 1;
+    const newStart = parseInt(match[3], 10);
+    const newLines = match[4] ? parseInt(match[4], 10) : 1;
+
+    const hunkLines: string[] = [];
+    let i = startIndex + 1;
+
+    // 读取 hunk 的所有行
+    while (i < lines.length) {
+        const l = lines[i];
+
+        // 遇到下一个 hunk 或文件头，停止
+        if (l.startsWith('@@') || l.startsWith('---') || l.startsWith('+++') || l.startsWith('diff --git')) {
+            break;
+        }
+
+        hunkLines.push(l);
+        i++;
+    }
+
+    return {
+        hunk: {
+            oldStart,
+            oldLines,
+            newStart,
+            newLines,
+            lines: hunkLines
+        },
+        nextIndex: i
+    };
+}
+
+// ========== 合并多个 Hunks ==========
+function mergeHunks(hunks: Hunk[]): { oldContent: string; newContent: string; startLine: number; endLine: number } {
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    let minLine = Infinity;
+    let maxLine = -Infinity;
+
+    for (const hunk of hunks) {
+        minLine = Math.min(minLine, hunk.oldStart);
+        maxLine = Math.max(maxLine, hunk.oldStart + hunk.oldLines - 1);
+
+        for (const line of hunk.lines) {
+            if (line.startsWith(' ')) {
+                // 上下文行（保持不变）
+                oldLines.push(line.substring(1));
+                newLines.push(line.substring(1));
+            } else if (line.startsWith('-')) {
+                // 删除的行
+                oldLines.push(line.substring(1));
+            } else if (line.startsWith('+')) {
+                // 添加的行
+                newLines.push(line.substring(1));
+            } else if (line.trim() === '') {
+                // 空行
+                oldLines.push('');
+                newLines.push('');
+            }
+        }
+    }
+
+    return {
+        oldContent: oldLines.join('\n'),
+        newContent: newLines.join('\n'),
+        startLine: minLine !== Infinity ? minLine : 1,
+        endLine: maxLine !== -Infinity ? maxLine : 1
+    };
+}
+
 // ========== 判断是否为代码搜索工具 ==========
 export function isCodebaseSearchTool(name: string): boolean {
     return name === 'codebase_search' || name === 'codebase-search' || name === 'codebase-retrieval';
@@ -435,6 +694,84 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
             intercepted: true,
             result: input  // 原封不动返回 arguments
         };
+    }
+
+    // ========== 拦截 apply_patch：转换为 str-replace-editor ==========
+    // apply_patch 使用 diff/patch 格式，我们将其转换为 str-replace-editor 格式
+    if (toolName === 'apply_patch' || toolName === 'apply-patch') {
+        log(`[INTERCEPT] apply_patch: parsing patch and converting to str-replace-editor`);
+
+        const patchInput = input.input || input.patch || '';
+        if (!patchInput) {
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: 'Missing patch input' }
+            };
+        }
+
+        try {
+            const parsedPatches = parsePatchInput(patchInput);
+
+            if (parsedPatches.length === 0) {
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: 'No valid patches found in input' }
+                };
+            }
+
+            log(`[INTERCEPT] apply_patch: parsed ${parsedPatches.length} patch(es)`);
+
+            // 应用所有 patches
+            const results: string[] = [];
+            for (const patch of parsedPatches) {
+                log(`[INTERCEPT] apply_patch: applying patch to ${patch.filePath}`);
+
+                const strReplaceInput = {
+                    path: patch.filePath,
+                    command: 'str_replace',
+                    old_str: patch.oldContent,
+                    new_str: patch.newContent,
+                    old_str_start_line_number: patch.startLine,
+                    old_str_end_line_number: patch.endLine,
+                    instruction_reminder: 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.'
+                };
+
+                const result = convertOrInterceptFileEdit('str-replace-editor', strReplaceInput, workspaceInfo);
+
+                if (result?.intercepted && result.result) {
+                    if (result.result.success) {
+                        results.push(`✅ ${patch.filePath}: ${result.result.message || 'success'}`);
+                    } else {
+                        results.push(`❌ ${patch.filePath}: ${result.result.error || 'failed'}`);
+                    }
+                }
+            }
+
+            const allSuccess = results.every(r => r.startsWith('✅'));
+
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: {
+                    success: allSuccess,
+                    message: results.join('\n')
+                }
+            };
+
+        } catch (e: any) {
+            log(`[INTERCEPT] apply_patch error: ${e.message}`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: `Patch parsing failed: ${e.message}` }
+            };
+        }
     }
 
     // ========== 拦截 str-replace-editor：直接执行文件编辑 ==========
