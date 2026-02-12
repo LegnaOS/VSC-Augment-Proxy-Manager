@@ -60,13 +60,14 @@ function parsePatchInput(patchInput: string): ParsedPatch[] {
 }
 
 // ========== 解析 Augment V4A diff 格式 ==========
-// 格式：
-// *** [ACTION] File: path/to/file
-// @@ class/function context (可选)
-// [3 lines context]
-// - old line
-// + new line
-// [3 lines context]
+// 实际格式（从逆向得到）：
+// *** Update File: path/to/file
+// @@ class TerminalGame          ← 上下文定位符（跳过）
+// @@     startAdventure() {      ← 上下文定位符（跳过）
+//         this.gameState = {};   ← 上下文行（保留）
+// -       old line               ← 删除行（- 后有空格）
+// +       new line               ← 添加行（+ 后有空格）
+//         context line           ← 上下文行（保留）
 function parseAugmentPatch(lines: string[], startIndex: number, filePath: string): (ParsedPatch & { nextIndex: number }) | null {
     const oldLines: string[] = [];
     const newLines: string[] = [];
@@ -80,32 +81,31 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
             break;
         }
 
-        // @@ 开头的是上下文定位符，不是实际代码
+        // @@ 开头的是上下文定位符，跳过
         if (line.startsWith('@@')) {
-            // 跳过上下文定位符
             i++;
             continue;
         }
 
         // - 开头：删除的行（只在 oldContent 中）
-        if (line.startsWith('- ') || line.startsWith('-\t')) {
-            oldLines.push(line.substring(1));
+        // 注意：- 后面有一个空格
+        if (line.startsWith('- ')) {
+            oldLines.push(line.substring(2)); // 去掉 "- "
             i++;
             continue;
         }
 
         // + 开头：添加的行（只在 newContent 中）
-        if (line.startsWith('+ ') || line.startsWith('+\t')) {
-            newLines.push(line.substring(1));
+        // 注意：+ 后面有一个空格
+        if (line.startsWith('+ ')) {
+            newLines.push(line.substring(2)); // 去掉 "+ "
             i++;
             continue;
         }
 
         // 其他行：上下文行（在 oldContent 和 newContent 中都有）
-        if (line.trim() !== '' || (oldLines.length > 0 || newLines.length > 0)) {
-            oldLines.push(line);
-            newLines.push(line);
-        }
+        oldLines.push(line);
+        newLines.push(line);
 
         i++;
     }
