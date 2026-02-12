@@ -91,6 +91,22 @@ API Key 安全存储在 VSCode 内置的 SecretStorage 中。
 
 ## 更新日志
 
+### v2.1.4
+- 🛠️ **完整支持 `apply_patch` 工具** — 支持 Augment 的两种 patch 格式（diff 格式和完整文件替换）
+- 🤖 **GLM-5 支持** — 更新智谱 AI 默认模型为 `glm-5`
+- 🔧 修复 patch 解析器的 substring 逻辑，正确处理缩进
+- 🔧 自动检测 patch 格式，智能选择 `str-replace-editor` 或 `save-file`
+
+### v2.1.3
+- 🌙 **Kimi Coding Plan 支持** — 支持月之暗面 Coding Plan API（需要特殊订阅）
+- 🔧 修复 Kimi API 端点配置
+- 🔧 完善 Anthropic 格式检测逻辑
+
+### v2.1.0
+- 🌙 **Kimi (月之暗面) 支持** — 新增 Kimi 标准 API 支持
+- 🔍 **JSON Mode** — 支持 Kimi 的结构化 JSON 输出
+- 🌐 **联网搜索** — 支持 Kimi 内置的 `$web_search` 功能
+
 ### v1.9.1
 - 🐛 修复模型选择器后显示 "noCanvas" 的问题
 - 🔄 切换供应商或模型后自动生效，无需重启代理
