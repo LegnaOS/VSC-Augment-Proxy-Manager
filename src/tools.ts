@@ -60,7 +60,7 @@ function parsePatchInput(patchInput: string): ParsedPatch[] {
 }
 
 // ========== 解析 Augment V4A diff 格式 ==========
-// 实际格式（从逆向得到）：
+// 格式 1（diff 格式）：
 // *** Update File: path/to/file
 // @@ class TerminalGame          ← 上下文定位符（跳过）
 // @@     startAdventure() {      ← 上下文定位符（跳过）
@@ -68,10 +68,17 @@ function parsePatchInput(patchInput: string): ParsedPatch[] {
 // -       old line               ← 删除行（- 后有空格）
 // +       new line               ← 添加行（+ 后有空格）
 //         context line           ← 上下文行（保留）
+//
+// 格式 2（完整文件替换）：
+// *** Begin Patch
+// *** Update File: path/to/file
+// <完整的文件内容>
+// *** End Patch
 function parseAugmentPatch(lines: string[], startIndex: number, filePath: string): (ParsedPatch & { nextIndex: number }) | null {
     const oldLines: string[] = [];
     const newLines: string[] = [];
     let i = startIndex;
+    let hasAnyDiffMarkers = false; // 检测是否有 diff 标记（@@, -, +）
 
     while (i < lines.length) {
         const line = lines[i];
@@ -83,6 +90,7 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
 
         // @@ 开头的是上下文定位符，跳过
         if (line.startsWith('@@')) {
+            hasAnyDiffMarkers = true;
             i++;
             continue;
         }
@@ -90,6 +98,7 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
         // - 开头：删除的行（只在 oldContent 中）
         // 注意：- 后面有一个空格
         if (line.startsWith('- ')) {
+            hasAnyDiffMarkers = true;
             oldLines.push(line.substring(2)); // 去掉 "- "
             i++;
             continue;
@@ -98,6 +107,7 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
         // + 开头：添加的行（只在 newContent 中）
         // 注意：+ 后面有一个空格
         if (line.startsWith('+ ')) {
+            hasAnyDiffMarkers = true;
             newLines.push(line.substring(2)); // 去掉 "+ "
             i++;
             continue;
@@ -112,6 +122,17 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
 
     if (oldLines.length === 0 && newLines.length === 0) {
         return null;
+    }
+
+    // 如果没有任何 diff 标记，说明是完整文件替换格式
+    // 这种情况下，newContent 就是完整的新文件内容，oldContent 留空
+    if (!hasAnyDiffMarkers && newLines.length > 0) {
+        return {
+            filePath,
+            oldContent: '', // 完整替换时，不需要 oldContent
+            newContent: newLines.join('\n'),
+            nextIndex: i
+        };
     }
 
     return {
@@ -749,17 +770,31 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                 log(`[DEBUG] apply_patch newContent (${patch.newContent.length} chars):\n${patch.newContent.substring(0, 200)}...`);
                 log(`[DEBUG] apply_patch startLine=${patch.startLine}, endLine=${patch.endLine}`);
 
-                const strReplaceInput = {
-                    path: patch.filePath,
-                    command: 'str_replace',
-                    old_str: patch.oldContent,
-                    new_str: patch.newContent,
-                    old_str_start_line_number: patch.startLine,
-                    old_str_end_line_number: patch.endLine,
-                    instruction_reminder: 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.'
-                };
+                let result: any;
 
-                const result = convertOrInterceptFileEdit('str-replace-editor', strReplaceInput, workspaceInfo);
+                // 如果 oldContent 为空，说明是完整文件替换，使用 save-file
+                if (patch.oldContent === '') {
+                    log(`[INTERCEPT] apply_patch: using save-file for complete file replacement`);
+                    const saveFileInput = {
+                        path: patch.filePath,
+                        file_content: patch.newContent,
+                        add_last_line_newline: true
+                    };
+                    result = convertOrInterceptFileEdit('save-file', saveFileInput, workspaceInfo);
+                } else {
+                    // 否则使用 str-replace-editor 进行部分替换
+                    log(`[INTERCEPT] apply_patch: using str-replace-editor for partial replacement`);
+                    const strReplaceInput = {
+                        path: patch.filePath,
+                        command: 'str_replace',
+                        old_str: patch.oldContent,
+                        new_str: patch.newContent,
+                        old_str_start_line_number: patch.startLine,
+                        old_str_end_line_number: patch.endLine,
+                        instruction_reminder: 'ALWAYS BREAK DOWN EDITS INTO SMALLER CHUNKS OF AT MOST 150 LINES EACH.'
+                    };
+                    result = convertOrInterceptFileEdit('str-replace-editor', strReplaceInput, workspaceInfo);
+                }
 
                 if (result?.intercepted && result.result) {
                     if (result.result.success) {
