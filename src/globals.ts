@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import { CurrentConfig } from './types';
+import type { VikingContextStore } from './rag/viking-context';
+import type { SessionMemory } from './rag/session-memory';
 
 // ===== 全局共享状态 =====
 // 所有模块通过 state 对象访问共享状态
-// 使用对象属性而非 export let，确保 CommonJS 下跨模块引用一致
 
 export const state = {
     proxyServer: null as http.Server | null,
@@ -15,10 +16,12 @@ export const state = {
     ragIndex: null as any,
     semanticEngine: null as any,
 
-    // 会话级请求队列 - 防止同一会话并发请求冲突
-    conversationQueues: new Map<string, Promise<void>>(),
+    // v2.0.0: Viking 子系统
+    vikingStore: null as VikingContextStore | null,
+    sessionMemory: null as SessionMemory | null,
 
-    // 保存每个会话的原始用户消息（Augment 不在 chat_history 中保存 request_message）
+    // 会话级请求队列
+    conversationQueues: new Map<string, Promise<void>>(),
     conversationUserMessages: new Map<string, string>(),
 
     // 当前配置
@@ -31,7 +34,6 @@ export const state = {
         enableCache: true,
         enableInterleavedThinking: true,
         enableThinking: true,
-        // OMC defaults
         omcEnabled: false,
         omcMode: 'team',
         omcContinuationEnforcement: true,

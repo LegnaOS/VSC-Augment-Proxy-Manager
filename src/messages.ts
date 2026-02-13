@@ -128,6 +128,15 @@ Example bad behavior (DO NOT DO THIS):
             log(`[OMC] System prompt injected (mode: ${state.currentConfig.omcMode}, continuation: ${state.currentConfig.omcContinuationEnforcement})`);
         }
     }
+
+    // v2.0.0: Viking Session Memory 注入 — 从历史对话中学习到的用户偏好和 Agent 经验
+    if (state.sessionMemory) {
+        const memoryPrompt = state.sessionMemory.buildMemoryPrompt(500);
+        if (memoryPrompt) {
+            parts.push(`# Session Memory\n${memoryPrompt}`);
+        }
+    }
+
     return parts.join('\n\n');
 }
 

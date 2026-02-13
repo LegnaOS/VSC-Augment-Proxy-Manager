@@ -11,7 +11,9 @@ import { forwardToAnthropicStream } from './providers/anthropic';
 import { forwardToOpenAIStream } from './providers/openai';
 import { forwardToGoogleStream } from './providers/google';
 const { RAGContextIndex } = require('./rag');
-const { SemanticEmbeddings } = require('./rag/embeddings');
+const { SemanticEmbeddings, LOCAL_MODELS } = require('./rag/embeddings');
+import { VikingContextStore } from './rag/viking-context';
+import { SessionMemory } from './rag/session-memory';
 
 // ========== 会话级请求队列 ==========
 const conversationQueues = new Map<string, Promise<void>>();
@@ -270,31 +272,136 @@ function extractKeywords(query: string): string[] {
     return [...new Set(query.toLowerCase().replace(/[^\w\s]/g,' ').split(/\s+/).filter(w => w.length > 2 && !stop.has(w)))];
 }
 
-// ========== RAG 初始化 ==========
+// ========== RAG 初始化 (v2.0.0: Viking 增强) ==========
 export async function initializeRAGIndex(): Promise<void> {
     const roots = getWorkspaceRoots(); if (roots.length === 0) return;
     const workspaceRoot = roots[0];
+    const cacheDir = path.join(workspaceRoot, '.augment-rag');
     try {
         state.ragIndex = new RAGContextIndex({ workspaceRoot });
-        log('[RAG] Initializing LevelDB storage...'); await state.ragIndex.initStorage();
+        log('[RAG] Initializing LevelDB storage...');
+        await state.ragIndex.initStorage();
         log(`[RAG] Indexing files in ${workspaceRoot}...`);
         const t0 = Date.now();
         await state.ragIndex.initialize((c: number, t: number) => { if (c % 500 === 0) log(`[RAG] Indexing progress: ${c}/${t}`); });
         const stats = state.ragIndex.getStats();
         log(`[RAG] Index ready: ${stats.documentCount} docs, checkpoint ${stats.checkpointId}, took ${((Date.now()-t0)/1000).toFixed(2)}s`);
+
         const cfg = vscode.workspace.getConfiguration('augmentProxy');
-        if (cfg.get('embedding.enabled', true) as boolean) {
-            try {
-                state.semanticEngine = new SemanticEmbeddings(path.join(workspaceRoot, '.augment-rag'), (m: string) => log(m), (s: any) => { if (state.sidebarProvider) state.sidebarProvider.updateEmbeddingStatus(s); });
-                await state.semanticEngine.initialize(); state.ragIndex.setSemanticEngine(state.semanticEngine);
-                log('[RAG] 🧠 Semantic search enabled'); log('[RAG] 🔄 Pre-generating embeddings...');
-                await state.ragIndex.preloadEmbeddings((c: number, t: number) => { if (c % 50 === 0 || c === t) log(`[RAG] Embedding progress: ${c}/${t}`); });
-            } catch (e: any) { log(`[RAG] ⚠️ Semantic engine failed: ${e.message}`); log('[RAG] Falling back to BM25 mode'); }
-        } else { log('[RAG] BM25 mode (semantic search disabled)'); }
+
+        // v2.0.0: 初始化 Viking 分层上下文
+        try {
+            state.vikingStore = new VikingContextStore(cacheDir);
+            await state.vikingStore.init();
+            state.ragIndex.setVikingStore(state.vikingStore);
+            log('[Viking] 📂 Context store initialized');
+        } catch (e: any) { log(`[Viking] ⚠️ Context store failed: ${e.message}`); }
+
+        // v2.0.0: 初始化 Session Memory
+        try {
+            state.sessionMemory = new SessionMemory(cacheDir);
+            await state.sessionMemory.init();
+            const memStats = state.sessionMemory.getStats();
+            log(`[Viking] 🧠 Session memory loaded: ${memStats.preferences} prefs, ${memStats.experiences} experiences`);
+        } catch (e: any) { log(`[Viking] ⚠️ Session memory failed: ${e.message}`); }
+
+        // Embedding 引擎 — 后台异步初始化，不阻塞 RAG 启动
+        // 模型下载可能很慢（335MB），同步 await 会导致 extension host 超时崩溃
+        state.semanticEngine = new SemanticEmbeddings(
+            cacheDir,
+            (m: string) => log(m),
+            (s: any) => { if (state.sidebarProvider) state.sidebarProvider.updateEmbeddingStatus(s); }
+        );
+
+        // v3.0.0: OOM 崩溃防护 — 大模型加载可能导致 extension host OOM 崩溃循环
+        // 用 globalState 标记"正在加载"，如果上次加载时崩了（标记还在），自动回退到默认小模型
+        let localModel = cfg.get('embedding.localModel', 'Xenova/all-MiniLM-L6-v2') as string;
+        const lastLoadingModel = state.extensionContext?.globalState.get<string>('embeddingModelLoading');
+        if (lastLoadingModel && lastLoadingModel === localModel) {
+            const modelInfo = LOCAL_MODELS.find(m => m.id === localModel);
+            if (modelInfo && modelInfo.sizeMB > 100) {
+                log(`[RAG] ⚠️ 上次加载 ${localModel} 时崩溃，自动回退到默认小模型`);
+                localModel = 'Xenova/all-MiniLM-L6-v2';
+                // 同时更新配置，避免下次还加载大模型
+                Promise.resolve(cfg.update('embedding.localModel', localModel, vscode.ConfigurationTarget.Global)).catch(() => {});
+            }
+        }
+        state.semanticEngine.setLocalModel(localModel);
+
+        const mirror = cfg.get('embedding.mirror', '') as string;
+        if (mirror) {
+            state.semanticEngine.setMirror(mirror);
+            log(`[RAG] 🪞 HuggingFace mirror: ${mirror}`);
+        }
+
+        const embEnabled = cfg.get('embedding.enabled', false) as boolean;
+        if (embEnabled) {
+            const embProvider = cfg.get('embedding.provider', '') as string;
+            const embApiKey = cfg.get('embedding.apiKey', '') as string;
+            if (embProvider && embApiKey) {
+                state.semanticEngine.configureRemote({
+                    enabled: true,
+                    provider: embProvider as 'glm' | 'openai' | 'custom',
+                    apiKey: embApiKey,
+                    baseUrl: cfg.get('embedding.baseUrl', '') as string,
+                    model: cfg.get('embedding.model', '') as string
+                });
+                log(`[RAG] 🌐 Remote embedding configured: ${embProvider}`);
+            }
+        }
+
+        // 🔥 后台异步：不 await，模型下载完成后自动挂载
+        const ragIndexRef = state.ragIndex;
+        const vikingStoreRef = state.vikingStore;
+        // v3.0.0: 设置 "正在加载" 标记 — 如果加载过程中 OOM 崩溃，下次启动能检测到
+        state.extensionContext?.globalState.update('embeddingModelLoading', localModel);
+        state.semanticEngine.initialize().then(async () => {
+            // 加载成功，清除崩溃标记
+            state.extensionContext?.globalState.update('embeddingModelLoading', '');
+            if (ragIndexRef) {
+                ragIndexRef.setSemanticEngine(state.semanticEngine!);
+                log('[RAG] 🧠 Semantic search enabled (background)');
+                // 后台预加载嵌入
+                try {
+                    log('[RAG] 🔄 Pre-generating embeddings...');
+                    await ragIndexRef.preloadEmbeddings((c: number, t: number) => {
+                        if (c % 50 === 0 || c === t) log(`[RAG] Embedding progress: ${c}/${t}`);
+                    });
+                } catch (e: any) { log(`[RAG] ⚠️ Embedding preload failed: ${e.message}`); }
+                // Viking L0/L1
+                if (vikingStoreRef) {
+                    const ragStats = ragIndexRef.getStats();
+                    if (ragStats.documentCount > 0) {
+                        log(`[Viking] 📊 L0/L1 will be generated on-demand for ${ragStats.documentCount} docs`);
+                    }
+                    const vkStats = vikingStoreRef.getStats();
+                    log(`[Viking] 📊 Context store: ${vkStats.totalResources} resources, ~${vkStats.l0TotalTokens} L0 tokens`);
+                }
+            }
+        }).catch((e: any) => {
+            // 正常失败（非 OOM），清除崩溃标记
+            state.extensionContext?.globalState.update('embeddingModelLoading', '');
+            log(`[RAG] ⚠️ Semantic engine failed: ${e.message}`);
+            log('[RAG] BM25 mode until model is ready');
+        });
+        log('[RAG] 🧠 Semantic engine initializing in background...');
     } catch (err) { log(`[RAG] Failed to initialize: ${err}`); state.ragIndex = null; }
 }
+
 export async function closeRAGIndex(): Promise<void> {
-    if (state.ragIndex) { try { await state.ragIndex.close(); log('[RAG] LevelDB storage closed'); } catch (e) { log(`[RAG] Error closing: ${e}`); } state.ragIndex = null; }
+    if (state.ragIndex) {
+        try { await state.ragIndex.close(); log('[RAG] LevelDB storage closed'); }
+        catch (e) { log(`[RAG] Error closing: ${e}`); }
+        state.ragIndex = null;
+    }
+    if (state.vikingStore) {
+        try { await state.vikingStore.close(); } catch { /* ignore */ }
+        state.vikingStore = null;
+    }
+    if (state.sessionMemory) {
+        try { await state.sessionMemory.close(); } catch { /* ignore */ }
+        state.sessionMemory = null;
+    }
 }
 
 // ========== handleCodebaseRetrieval ==========
@@ -451,6 +558,11 @@ function handleChatStream(req: any, res: any) {
             conversationQueues.set(conversationId, curPromise);
             try {
                 const workspaceInfo = extractWorkspaceInfo(augmentReq);
+                // v2.0.0: Session Memory — 从用户消息中提取偏好
+                const userMsg = augmentReq.message || augmentReq.request_message || '';
+                if (userMsg && state.sessionMemory) {
+                    state.sessionMemory.extractFromUserMessage(userMsg, conversationId).catch(() => {});
+                }
                 if (!state.currentConfig.apiKey) { sendAugmentError(res, `No API key for ${state.currentConfig.provider}`); return; }
                 // 转发到目标 provider
                 if (isAnthropicFormat(state.currentConfig.provider)) await forwardToAnthropicStream(augmentReq, res);
@@ -514,13 +626,16 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
                 const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
                 const currentToken = currentAdvanced.apiToken || '';
                 const currentUrl = currentAdvanced.completionURL || '';
-                const newAdvanced = { ...currentAdvanced, apiToken: 'PROXY-TOKEN', completionURL: proxyUrl };
-                await augmentConfig.update('advanced', newAdvanced, vscode.ConfigurationTarget.Global);
-                log(`[AUTO-CONFIG] ✅ Augment 扩展已自动配置`);
-                log(`[AUTO-CONFIG] completionURL = ${proxyUrl}`);
-                // 首次配置或配置变更时需要重载窗口让 Augment 扩展重新初始化
-                const needReload = !currentToken || !currentUrl || !currentUrl.includes('proxy.localhost');
-                if (needReload) {
+                const alreadyConfigured = currentToken === 'PROXY-TOKEN' && currentUrl === proxyUrl;
+                if (alreadyConfigured) {
+                    // 配置已经正确，完全跳过 update（避免触发 Augment 扩展的 config change listener 导致多余重载）
+                    log(`[AUTO-CONFIG] ✅ 配置已就绪，无需写入或重载`);
+                } else {
+                    // 首次配置或配置变更：写入并重载
+                    const newAdvanced = { ...currentAdvanced, apiToken: 'PROXY-TOKEN', completionURL: proxyUrl };
+                    await augmentConfig.update('advanced', newAdvanced, vscode.ConfigurationTarget.Global);
+                    log(`[AUTO-CONFIG] ✅ Augment 扩展已自动配置`);
+                    log(`[AUTO-CONFIG] completionURL = ${proxyUrl}`);
                     log(`[AUTO-CONFIG] 首次配置，需要重载窗口让 Augment 扩展进入 API Token 模式`);
                     extensionContext.globalState.update('proxyAutoStart', true);
                     setTimeout(() => {

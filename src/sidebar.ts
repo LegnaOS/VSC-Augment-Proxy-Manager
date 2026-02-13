@@ -57,6 +57,28 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                 case 'fetchModels': await this.fetchModels(msg.provider); break;
                 case 'saveOmc': await this.saveOMCConfig(msg.omc); break;
                 case 'saveEmbedding': await this.saveEmbeddingConfig(msg.embedding); break;
+                case 'switchLocalModel':
+                    try {
+                        const augCfg = vscode.workspace.getConfiguration('augmentProxy');
+                        await augCfg.update('embedding.localModel', msg.modelId, vscode.ConfigurationTarget.Global);
+                        if (msg.mirror !== undefined) {
+                            await augCfg.update('embedding.mirror', msg.mirror, vscode.ConfigurationTarget.Global);
+                        }
+                        if (state.semanticEngine) {
+                            if (msg.mirror) state.semanticEngine.setMirror(msg.mirror);
+                            await state.semanticEngine.switchLocalModel(msg.modelId);
+                            vscode.window.showInformationMessage(`本地模型已切换: ${msg.modelId.replace('Xenova/', '')}`);
+                        }
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`模型切换失败: ${err.message}`);
+                    }
+                    break;
+                case 'cancelDownload':
+                    if (state.semanticEngine) {
+                        state.semanticEngine.cancelDownload();
+                        log('[RAG] ⏹️ 下载取消请求已发送');
+                    }
+                    break;
             }
         });
         this.sendFullStatus();
@@ -120,7 +142,9 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
             provider: config.get('embedding.provider', 'glm'),
             apiKey: config.get('embedding.apiKey', ''),
             baseUrl: config.get('embedding.baseUrl', ''),
-            model: config.get('embedding.model', '')
+            model: config.get('embedding.model', ''),
+            localModel: config.get('embedding.localModel', 'Xenova/all-MiniLM-L6-v2'),
+            mirror: config.get('embedding.mirror', '')
         };
         // OMC 配置
         configData.omc = {
@@ -343,12 +367,35 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <div id="downloadProgress" style="display:none; margin: 8px 0;">
             <div style="background: var(--vscode-input-background); border-radius: 4px; height: 6px; overflow: hidden;"><div id="progressBar" style="height: 100%; background: #4caf50; width: 0%; transition: width 0.3s;"></div></div>
             <div id="progressText" style="font-size: 11px; opacity: 0.7; margin-top: 2px;">下载中: 0%</div>
+            <button id="cancelDownloadBtn" class="small" style="margin-top: 4px; background: #f44336;">⏹️ 取消下载</button>
         </div>
         <div id="embeddingProgressRow" style="display:none; font-size: 11px; opacity: 0.8; margin: 4px 0;"><span>🔄 正在生成嵌入:</span><span id="embeddingProgressText" style="margin-left: 4px; color: #4caf50;">0/0</span></div>
         <div class="status" style="font-size: 11px; opacity: 0.8;"><span>缓存文档:</span><span id="cacheCount" style="margin-left: 4px;">0</span></div>
-        <div class="row" style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+        <div style="font-size: 11px; opacity: 0.6; margin: 6px 0 2px;">📦 本地模型 <span style="color: #4caf50;">（默认，启动代理后自动加载）</span></div>
+        <div class="row"><label>选择模型</label>
+            <select id="localModelSelect">
+                <option value="Xenova/all-MiniLM-L6-v2">MiniLM-L6 (22MB) — 最小最快</option>
+                <option value="Xenova/all-MiniLM-L12-v2">MiniLM-L12 (33MB) — 12层更准</option>
+                <option value="Xenova/bge-small-en-v1.5">BGE-Small (33MB) — 代码搜索好</option>
+                <option value="Xenova/bge-base-en-v1.5">BGE-Base (109MB) — 性价比最高 ⭐</option>
+                <option value="Xenova/bge-large-en-v1.5">BGE-Large (335MB) — 最高精度</option>
+                <option value="Xenova/multilingual-e5-small">E5-Multi-Small (118MB) — 多语言</option>
+                <option value="Xenova/multilingual-e5-base">E5-Multi-Base (278MB) — 中文最佳 ⭐</option>
+            </select>
+        </div>
+        <div id="localModelInfo" style="font-size: 11px; opacity: 0.7; margin: 4px 0; padding: 4px 8px; background: var(--vscode-input-background); border-radius: 4px;"></div>
+        <div class="row" style="margin-top: 4px;"><label>🪞 下载镜像</label>
+            <select id="mirrorSelect">
+                <option value="">HuggingFace 官方</option>
+                <option value="https://hf-mirror.com/">hf-mirror.com (国内快)</option>
+            </select>
+        </div>
+        <button id="switchModelBtn" class="small" style="margin-top: 4px;">⬇️ 下载并使用此模型</button>
+        <div style="border-top: 1px solid var(--vscode-input-background); margin: 12px 0 8px; opacity: 0.5;"></div>
+        <div style="font-size: 11px; opacity: 0.6; margin-bottom: 4px;">🌐 远程 Embedding API <span style="opacity: 0.5;">（可选，替代或增强本地模型）</span></div>
+        <div class="row" style="display: flex; align-items: center; gap: 8px;">
             <input type="checkbox" id="embEnabled" style="width: auto;">
-            <label for="embEnabled" style="display: inline; margin: 0; font-size: 13px; opacity: 1;">启用语义搜索</label>
+            <label for="embEnabled" style="display: inline; margin: 0; font-size: 12px; opacity: 0.8;">启用远程 Embedding API</label>
         </div>
         <div id="embOptions" style="display:none;">
             <div class="row"><label>Embedding 供应商</label>
@@ -444,7 +491,16 @@ const $omcOptions = document.getElementById('omcOptions');
 const $omcMode = document.getElementById('omcMode');
 const $omcContinuation = document.getElementById('omcContinuation');
 const $omcMagicKw = document.getElementById('omcMagicKw');
-$omcEnabled.onchange = () => { $omcOptions.style.display = $omcEnabled.checked ? 'block' : 'none'; };
+$omcEnabled.onchange = () => {
+    $omcOptions.style.display = $omcEnabled.checked ? 'block' : 'none';
+    // 自动保存 enabled 状态
+    vscode.postMessage({ command: 'saveOmc', omc: {
+        enabled: $omcEnabled.checked,
+        mode: $omcMode.value,
+        continuationEnforcement: $omcContinuation.checked,
+        magicKeywords: $omcMagicKw.checked
+    } });
+};
 document.getElementById('saveOmcBtn').onclick = () => {
     vscode.postMessage({ command: 'saveOmc', omc: {
         enabled: $omcEnabled.checked,
@@ -461,7 +517,47 @@ const $embApiKey = document.getElementById('embApiKey');
 const $embBaseUrl = document.getElementById('embBaseUrl');
 const $embModel = document.getElementById('embModel');
 const $embCustomRow = document.getElementById('embCustomRow');
-$embEnabled.onchange = () => { $embOptions.style.display = $embEnabled.checked ? 'block' : 'none'; };
+const $localModelSelect = document.getElementById('localModelSelect');
+const $localModelInfo = document.getElementById('localModelInfo');
+const $switchModelBtn = document.getElementById('switchModelBtn');
+const $cancelDownloadBtn = document.getElementById('cancelDownloadBtn');
+const $mirrorSelect = document.getElementById('mirrorSelect');
+const localModels = {
+    'Xenova/all-MiniLM-L6-v2': { dim: 384, size: 22, desc: '最小最快，基础语义搜索', lang: 'English' },
+    'Xenova/all-MiniLM-L12-v2': { dim: 384, size: 33, desc: '12层，比L6更准，速度略慢', lang: 'English' },
+    'Xenova/bge-small-en-v1.5': { dim: 384, size: 33, desc: 'BAAI BGE 小模型，代码搜索效果好', lang: 'English' },
+    'Xenova/bge-base-en-v1.5': { dim: 768, size: 109, desc: 'BGE 中等模型，性价比最高 ⭐', lang: 'English' },
+    'Xenova/bge-large-en-v1.5': { dim: 1024, size: 335, desc: 'BGE 大模型，最高精度', lang: 'English' },
+    'Xenova/multilingual-e5-small': { dim: 384, size: 118, desc: '多语言支持，适合中文项目', lang: '多语言' },
+    'Xenova/multilingual-e5-base': { dim: 768, size: 278, desc: '多语言中等模型，中文效果最佳 ⭐', lang: '多语言' }
+};
+function updateLocalModelInfo() {
+    const m = localModels[$localModelSelect.value];
+    if (m) $localModelInfo.innerHTML = '<b>' + m.dim + '</b>维 · <b>' + m.size + '</b>MB · ' + m.lang + '<br>' + m.desc;
+}
+$localModelSelect.onchange = updateLocalModelInfo;
+updateLocalModelInfo();
+$switchModelBtn.onclick = () => {
+    $switchModelBtn.disabled = true;
+    $switchModelBtn.textContent = '⏳ 下载中...';
+    vscode.postMessage({ command: 'switchLocalModel', modelId: $localModelSelect.value, mirror: $mirrorSelect.value });
+};
+$cancelDownloadBtn.onclick = () => {
+    vscode.postMessage({ command: 'cancelDownload' });
+    $cancelDownloadBtn.disabled = true;
+    $cancelDownloadBtn.textContent = '⏳ 取消中...';
+};
+$embEnabled.onchange = () => {
+    $embOptions.style.display = $embEnabled.checked ? 'block' : 'none';
+    // 自动保存 enabled 状态
+    vscode.postMessage({ command: 'saveEmbedding', embedding: {
+        enabled: $embEnabled.checked,
+        provider: $embProvider.value,
+        apiKey: $embApiKey.value,
+        baseUrl: $embBaseUrl.value,
+        model: $embModel.value
+    } });
+};
 $embProvider.onchange = () => { $embCustomRow.style.display = $embProvider.value === 'custom' ? 'block' : 'none'; };
 document.getElementById('saveEmbBtn').onclick = () => {
     vscode.postMessage({ command: 'saveEmbedding', embedding: {
@@ -481,19 +577,30 @@ function updateEmbeddingUI(status) {
     const cacheCount = document.getElementById('cacheCount');
     const embeddingProgressRow = document.getElementById('embeddingProgressRow');
     const embeddingProgressText = document.getElementById('embeddingProgressText');
+    if (status.localModelId) $localModelSelect.value = status.localModelId;
     if (status.modelLoading) {
         dot.className = 'dot'; dot.style.background = '#ff9800'; dot.style.animation = 'pulse 1s infinite';
-        statusText.textContent = '模型: 加载中...'; progressDiv.style.display = 'block';
-        progressBar.style.width = status.downloadProgress + '%'; progressText.textContent = '下载中: ' + status.downloadProgress + '%';
+        const modelName = status.localModelName || '模型';
+        const fileInfo = status.downloadFile ? ' (' + status.downloadFile + ')' : '';
+        statusText.textContent = modelName + ': 加载中...'; progressDiv.style.display = 'block';
+        progressBar.style.width = status.downloadProgress + '%';
+        progressText.textContent = '下载' + fileInfo + ': ' + status.downloadProgress + '%';
         embeddingProgressRow.style.display = 'none';
+        $switchModelBtn.disabled = true; $switchModelBtn.textContent = '⏳ 下载中...';
+        $cancelDownloadBtn.disabled = false; $cancelDownloadBtn.textContent = '⏹️ 取消下载';
     } else if (status.modelReady) {
         dot.className = 'dot on'; dot.style.animation = ''; progressDiv.style.display = 'none';
-        if (status.isPreloading && status.embeddingProgress) { statusText.textContent = '模型: 就绪, 生成中...'; embeddingProgressRow.style.display = 'block'; embeddingProgressText.textContent = status.embeddingProgress; }
-        else { statusText.textContent = '模型: 已就绪 ✓'; embeddingProgressRow.style.display = 'none'; }
+        const modelName = status.localModelName || '模型';
+        const dimInfo = status.dimensions ? ' (' + status.dimensions + 'd)' : '';
+        if (status.isPreloading && status.embeddingProgress) { statusText.textContent = modelName + dimInfo + ' 生成中...'; embeddingProgressRow.style.display = 'block'; embeddingProgressText.textContent = status.embeddingProgress; }
+        else { statusText.textContent = modelName + dimInfo + ' ✓'; embeddingProgressRow.style.display = 'none'; }
+        $switchModelBtn.disabled = false; $switchModelBtn.textContent = '⬇️ 下载并使用此模型';
     } else if (status.error) {
         dot.className = 'dot off'; dot.style.animation = ''; statusText.textContent = '模型: 加载失败'; progressDiv.style.display = 'none'; embeddingProgressRow.style.display = 'none';
+        $switchModelBtn.disabled = false; $switchModelBtn.textContent = '⬇️ 下载并使用此模型';
     } else {
         dot.className = 'dot off'; dot.style.animation = ''; statusText.textContent = '模型: 未加载'; progressDiv.style.display = 'none'; embeddingProgressRow.style.display = 'none';
+        $switchModelBtn.disabled = false; $switchModelBtn.textContent = '⬇️ 下载并使用此模型';
     }
     cacheCount.textContent = status.cacheCount || 0;
 }
@@ -558,6 +665,8 @@ window.addEventListener('message', e => {
             $embBaseUrl.value = msg.config.embedding.baseUrl || '';
             $embModel.value = msg.config.embedding.model || '';
             $embCustomRow.style.display = msg.config.embedding.provider === 'custom' ? 'block' : 'none';
+            if (msg.config.embedding.localModel) { $localModelSelect.value = msg.config.embedding.localModel; updateLocalModelInfo(); }
+            if (msg.config.embedding.mirror !== undefined) { $mirrorSelect.value = msg.config.embedding.mirror; }
         }
         // 恢复 OMC 状态
         if (msg.config.omc) {

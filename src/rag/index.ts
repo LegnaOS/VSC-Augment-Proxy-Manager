@@ -17,6 +17,7 @@ import * as crypto from 'crypto';
 import { KvStore } from './storage';
 import { CodeStructure, generateLocalContext, LLMConfig } from './context-generator';
 import { SemanticEmbeddings } from './embeddings';
+import { VikingContextStore } from './viking-context';
 
 // ============ 类型定义 ============
 
@@ -648,7 +649,8 @@ export class RAGContextIndex {
     private mtimeCache: MtimeCache;
     private blobStorage: BlobStorage;
     private tfidfEngine: TFIDFEngine;
-    private semanticEngine: SemanticEmbeddings | null = null;  // 🔥 v1.6.0: 语义搜索引擎
+    private semanticEngine: SemanticEmbeddings | null = null;
+    private vikingStore: VikingContextStore | null = null;  // v2.0.0: Viking 分层上下文
     private checkpointId: number = 0;
     private pendingChanges: number = 0;
     private initialized: boolean = false;
@@ -660,7 +662,7 @@ export class RAGContextIndex {
         this.config = {
             workspaceRoot: config.workspaceRoot,
             cacheDir: config.cacheDir || path.join(config.workspaceRoot, '.augment-rag'),
-            maxFileSize: config.maxFileSize || 1024 * 1024,  // 1MB
+            maxFileSize: config.maxFileSize || 1024 * 1024,
             extensions: config.extensions || [
                 '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
                 '.py', '.pyw',
@@ -687,15 +689,21 @@ export class RAGContextIndex {
         this.mtimeCache = new MtimeCache(this.config.cacheDir);
         this.blobStorage = new BlobStorage(this.config.cacheDir);
         this.tfidfEngine = new TFIDFEngine(this.config.cacheDir);
-        // 🔥 v1.6.0: 语义引擎由外部配置（不在构造函数中初始化）
         this.semanticEngine = null;
     }
 
-    // 🔥 v1.6.0: 设置语义搜索引擎（由 extension.ts 调用）
     setSemanticEngine(engine: SemanticEmbeddings): void {
         this.semanticEngine = engine;
         this.onProgress?.('[RAG] Semantic engine configured');
     }
+
+    // v2.0.0: 设置 Viking 分层上下文存储
+    setVikingStore(store: VikingContextStore): void {
+        this.vikingStore = store;
+        this.onProgress?.('[RAG] Viking context store configured');
+    }
+
+    getVikingStore(): VikingContextStore | null { return this.vikingStore; }
 
     // 🔥 v1.7.1: 预加载所有文档嵌入（语义搜索）
     async preloadEmbeddings(onProgress?: (current: number, total: number) => void): Promise<void> {
@@ -914,26 +922,90 @@ export class RAGContextIndex {
         this.saveCheckpoint();
     }
 
-    // 🔥 关闭存储 - 必须在扩展停用时调用
     async close(): Promise<void> {
-        await Promise.all([
+        const tasks: Promise<void>[] = [
             this.mtimeCache.close(),
             this.blobStorage.close(),
             this.tfidfEngine.close()
-        ]);
+        ];
+        if (this.vikingStore) tasks.push(this.vikingStore.close());
+        await Promise.all(tasks);
     }
 
-    // 🔥 v1.6.0: 语义搜索（异步）- 优先使用，BM25 作为降级
+    // v2.0.0: Viking 增强搜索 — 向量初筛 → 目录聚合 → 递归下钻 → 结果整合
     async searchAsync(query: string, topK: number = 10): Promise<SearchResult[]> {
-        // 尝试使用语义搜索
         if (this.semanticEngine?.isAvailable()) {
-            return this.semanticSearch(query, topK);
+            // Step 1: 向量初筛 — 取 topK * 3 的粗选结果
+            const initialResults = await this.semanticSearch(query, topK * 3);
+
+            // Step 2: 目录聚合 — 统计每个目录的命中数和总分
+            if (initialResults.length > topK && this.vikingStore) {
+                const dirScores = new Map<string, { score: number; count: number; paths: string[] }>();
+                for (const r of initialResults) {
+                    const dir = path.dirname(r.path);
+                    const entry = dirScores.get(dir) || { score: 0, count: 0, paths: [] };
+                    entry.score += r.score;
+                    entry.count++;
+                    entry.paths.push(r.path);
+                    dirScores.set(dir, entry);
+                }
+
+                // Step 3: 找到得分最高的目录们（top 3）
+                const topDirs = [...dirScores.entries()]
+                    .sort((a, b) => b[1].score - a[1].score)
+                    .slice(0, 3);
+
+                // Step 4: 递归下钻 — 从高分目录中取更多文件
+                const boostedPaths = new Set<string>();
+                for (const [dir] of topDirs) {
+                    // 获取该目录下所有文件，加入候选
+                    const allDocs = this.getAllDocuments();
+                    for (const [docPath] of allDocs) {
+                        if (docPath.startsWith(dir + '/') || docPath.startsWith(dir + '\\')) {
+                            boostedPaths.add(docPath);
+                        }
+                    }
+                }
+
+                // Step 5: 合并结果 — 高分目录的文件加权
+                const resultSet = new Map<string, SearchResult>();
+                for (const r of initialResults) {
+                    resultSet.set(r.path, r);
+                }
+                // 来自高分目录但不在初筛结果中的文件，用 BM25 补分
+                for (const p of boostedPaths) {
+                    if (!resultSet.has(p)) {
+                        // 目录关联性加权 — 同目录文件获得一个基础分
+                        const dirBonus = 0.3;
+                        const content = await this.blobStorage.getByPath(p);
+                        if (content) {
+                            const queryTerms = TFIDFEngine.tokenize(query);
+                            const snippet = this.extractBestSnippet(content, queryTerms);
+                            if (snippet) {
+                                resultSet.set(p, {
+                                    path: p,
+                                    content: snippet.content,
+                                    lineStart: snippet.lineStart,
+                                    lineEnd: snippet.lineEnd,
+                                    score: dirBonus,
+                                    highlights: queryTerms,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                return [...resultSet.values()]
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, topK);
+            }
+
+            return initialResults.slice(0, topK);
         }
-        // 降级到 BM25
         return this.search(query, topK);
     }
 
-    // 🔥 v1.6.0: 纯语义搜索
+    // v1.6.0: 纯语义搜索
     private async semanticSearch(query: string, topK: number): Promise<SearchResult[]> {
         if (!this.semanticEngine) return [];
 

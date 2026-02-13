@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "2.1.5",
+  "version": "3.0.1",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -317,6 +317,40 @@
           "type": "string",
           "default": "",
           "description": "自定义 Embedding 模型名称 (留空使用默认)"
+        },
+        "augmentProxy.embedding.localModel": {
+          "type": "string",
+          "default": "Xenova/all-MiniLM-L6-v2",
+          "enum": [
+            "Xenova/all-MiniLM-L6-v2",
+            "Xenova/all-MiniLM-L12-v2",
+            "Xenova/bge-small-en-v1.5",
+            "Xenova/bge-base-en-v1.5",
+            "Xenova/multilingual-e5-small"
+          ],
+          "enumDescriptions": [
+            "MiniLM-L6 (22MB, 384d) — 最小最快",
+            "MiniLM-L12 (33MB, 384d) — 12层更准",
+            "BGE-Small (33MB, 384d) — 代码搜索好",
+            "BGE-Base (109MB, 768d) — 性价比最高 ⭐",
+            "E5-Multi-Small (118MB, 384d) — 多语言"
+          ],
+          "description": "本地 Embedding 模型选择 (不配置远程 API 时使用)"
+        },
+        "augmentProxy.embedding.mirror": {
+          "type": "string",
+          "default": "",
+          "enum": [
+            "",
+            "https://hf-mirror.com/",
+            "https://huggingface.co/"
+          ],
+          "enumDescriptions": [
+            "默认 (HuggingFace 官方)",
+            "hf-mirror.com — 国内镜像，下载更快",
+            "HuggingFace 官方"
+          ],
+          "description": "HuggingFace 模型下载镜像 (国内用户建议选 hf-mirror.com)"
         }
       }
     }

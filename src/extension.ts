@@ -52,12 +52,18 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export async function deactivate() {
-    // 清除 Augment 扩展的自动配置，避免代理停止后扩展仍指向已关闭的代理
-    try {
-        const augmentConfig = vscode.workspace.getConfiguration('augment');
-        const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
-        await augmentConfig.update('advanced', { ...currentAdvanced, apiToken: '', completionURL: '' }, vscode.ConfigurationTarget.Global);
-    } catch {}
+    // 只在代理不需要自动恢复时清除配置
+    // 如果 proxyAutoStart = true，说明是 reloadWindow 触发的 deactivate，重载后会自动恢复代理，不能清配置
+    const willAutoRestart = state.extensionContext?.globalState.get<boolean>('proxyAutoStart');
+    if (!willAutoRestart) {
+        try {
+            const augmentConfig = vscode.workspace.getConfiguration('augment');
+            const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
+            if (currentAdvanced.apiToken || currentAdvanced.completionURL) {
+                await augmentConfig.update('advanced', { ...currentAdvanced, apiToken: '', completionURL: '' }, vscode.ConfigurationTarget.Global);
+            }
+        } catch {}
+    }
     await closeRAGIndex();
     if (state.proxyServer) state.proxyServer.close();
 }
