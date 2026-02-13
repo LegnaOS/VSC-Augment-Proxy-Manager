@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-2.1.4-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-2.1.5-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -37,7 +37,7 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 | **DeepSeek** | Anthropic 兼容 | `deepseek-chat` |
 | **Google Gemini** | Google 原生 | `gemini-3-pro-preview` |
 | **OpenAI** | 原生 | `gpt-4` |
-| **GLM (智谱)** | OpenAI 兼容 | `GLM-4.7` |
+| **GLM (智谱)** | OpenAI 兼容 | `glm-5` |
 | **Kimi (月之暗面)** | OpenAI 兼容 | `moonshot-v1-auto` |
 | **自定义** | Anthropic / OpenAI | — |
 
@@ -55,6 +55,8 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 - **流式响应** — 聊天、补全、指令全程实时 SSE 流式传输
 - **完整 Agent 模式** — 工具调用、文件编辑、代码库检索全部正常工作
 - **本地代码索引** — 内置 RAG 语义搜索索引，无需云端同步
+- **OMC 编排增强** — 集成 [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)，6 种编排模式 + 魔法关键词，可在侧边栏开关
+- **Embedding 配置** — 侧边栏可视化配置语义搜索的 Embedding 供应商 (GLM/OpenAI/自定义)
 - **思考模式** — 支持 DeepSeek、MiniMax、GLM 的扩展思考 (Thinking)
 - **JSON Mode** — 支持 Kimi API 的结构化 JSON 输出模式
 - **联网搜索** — 支持 Kimi 内置的 `$web_search` 联网搜索功能
@@ -73,6 +75,10 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 | `augmentProxy.compressionThreshold` | `80` | 压缩触发阈值 (%) |
 | `augmentProxy.{provider}.baseUrl` | *按供应商* | API 端点地址 |
 | `augmentProxy.{provider}.model` | *按供应商* | 模型名称 |
+| `augmentProxy.omc.enabled` | `false` | 启用 OMC 编排增强 |
+| `augmentProxy.omc.mode` | `team` | OMC 编排模式 (team/autopilot/ultrawork/ralph/ecomode/pipeline) |
+| `augmentProxy.embedding.enabled` | `false` | 启用语义搜索 Embedding |
+| `augmentProxy.embedding.provider` | `glm` | Embedding 供应商 (glm/openai/custom) |
 
 各供应商的专属选项（思考模式、缓存等）在设置中 `augmentProxy.{provider}.*` 下配置。
 
@@ -90,6 +96,13 @@ API Key 安全存储在 VSCode 内置的 SecretStorage 中。
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
 ## 更新日志
+
+### v2.1.5
+- 🚀 **OMC 编排增强** — 集成 oh-my-claudecode，6 种编排模式 (Team/Autopilot/Ultrawork/Ralph/Ecomode/Pipeline)
+- 🔮 **魔法关键词** — 消息中输入 ultrawork/search/analyze/ultrathink 自动增强提示
+- 🧠 **Embedding 配置 UI** — 侧边栏可视化配置语义搜索供应商、API Key、自定义端点
+- 🔧 修复配置保存后状态丢失的 race condition (debounced sendFullStatus)
+- 🧹 清理无用的 release notes 文件
 
 ### v2.1.4
 - 🛠️ **完整支持 `apply_patch` 工具** — 支持 Augment 的两种 patch 格式（diff 格式和完整文件替换）

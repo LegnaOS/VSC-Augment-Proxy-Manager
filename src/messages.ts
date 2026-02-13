@@ -2,6 +2,7 @@
 // Augment ↔ Anthropic / OpenAI / Gemini 消息格式互转
 
 import { state, log } from './globals';
+import { getOMCSystemPrompt, processOMCMagicKeywords } from './omc';
 
 // ===== 从请求中提取工作区信息 =====
 export function extractWorkspaceInfo(req: any): { workspacePath?: string; repositoryRoot?: string; currentFile?: string; cwd?: string } {
@@ -119,6 +120,14 @@ Example bad behavior (DO NOT DO THIS):
 1. Call tools
 2. End conversation without any text response ❌`);
     }
+    // OMC (oh-my-claudecode) 系统提示注入
+    if (state.currentConfig.omcEnabled) {
+        const omcPrompt = getOMCSystemPrompt();
+        if (omcPrompt) {
+            parts.push(omcPrompt);
+            log(`[OMC] System prompt injected (mode: ${state.currentConfig.omcMode}, continuation: ${state.currentConfig.omcContinuationEnforcement})`);
+        }
+    }
     return parts.join('\n\n');
 }
 
@@ -216,7 +225,8 @@ export function augmentToAnthropicMessages(req: any) {
     }
     // 处理 nodes（文件内容、工具结果、图片）
     const imageNodes: any[] = [];
-    const currentMessage = req.message || '';
+    const rawMessage = req.message || '';
+    const currentMessage = state.currentConfig.omcEnabled ? processOMCMagicKeywords(rawMessage) : rawMessage;
     const toolResults: any[] = [];
     for (const node of req.nodes || []) {
         const nodeType = node.type;
@@ -336,7 +346,8 @@ export function augmentToAnthropicMessages(req: any) {
 export function augmentToOpenAIMessages(req: any) {
     const messages: any[] = [];
     const conversationId = req.conversation_id || '';
-    const currentMessage = req.message || '';
+    const rawMessage = req.message || '';
+    const currentMessage = state.currentConfig.omcEnabled ? processOMCMagicKeywords(rawMessage) : rawMessage;
     const historyLength = (req.chat_history || []).length;
 
     // 保存原始用户消息（仅当新对话开始时）
@@ -522,7 +533,8 @@ export function augmentToGeminiMessages(req: any): any[] {
         }
     }
     if (req.message && req.message !== '...') {
-        currentUserParts.push({ text: req.message });
+        const geminiMsg = state.currentConfig.omcEnabled ? processOMCMagicKeywords(req.message) : req.message;
+        currentUserParts.push({ text: geminiMsg });
         for (const node of req.nodes || []) {
             if (node.type === 2 && node.image_node) {
                 const imageNode = node.image_node;

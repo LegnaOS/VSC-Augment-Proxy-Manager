@@ -37,5 +37,10 @@ export interface CurrentConfig {
     enableCache: boolean;
     enableInterleavedThinking: boolean;
     enableThinking: boolean;
+    // OMC (oh-my-claudecode) 配置
+    omcEnabled: boolean;
+    omcMode: string;
+    omcContinuationEnforcement: boolean;
+    omcMagicKeywords: boolean;
 }
 

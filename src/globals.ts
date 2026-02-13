@@ -30,7 +30,12 @@ export const state = {
         model: '',
         enableCache: true,
         enableInterleavedThinking: true,
-        enableThinking: true
+        enableThinking: true,
+        // OMC defaults
+        omcEnabled: false,
+        omcMode: 'team',
+        omcContinuationEnforcement: true,
+        omcMagicKeywords: true
     } as CurrentConfig
 };
 

@@ -11,8 +11,15 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
     _proxyRunning = false;
     _embeddingStatus: any = null;
     _lastContextStatus: any = null;
+    private _sendFullStatusTimer: any = null;
 
     constructor(extensionUri: vscode.Uri) { this._extensionUri = extensionUri; }
+
+    /** Debounced sendFullStatus — 多次快速调用合并为一次，避免 config change 事件 race condition */
+    sendFullStatusDebounced() {
+        if (this._sendFullStatusTimer) clearTimeout(this._sendFullStatusTimer);
+        this._sendFullStatusTimer = setTimeout(() => { this._sendFullStatusTimer = null; this.sendFullStatus(); }, 80);
+    }
 
     updateStatus(proxyRunning: boolean) {
         this._proxyRunning = proxyRunning;
@@ -48,6 +55,8 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
                     vscode.window.showInformationMessage(`压缩阈值已设置为 ${msg.threshold}%`);
                     break;
                 case 'fetchModels': await this.fetchModels(msg.provider); break;
+                case 'saveOmc': await this.saveOMCConfig(msg.omc); break;
+                case 'saveEmbedding': await this.saveEmbeddingConfig(msg.embedding); break;
             }
         });
         this.sendFullStatus();
@@ -68,6 +77,27 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         this.sendFullStatus();
     }
 
+    async saveOMCConfig(omc: any) {
+        const vscodeConfig = vscode.workspace.getConfiguration('augmentProxy');
+        await vscodeConfig.update('omc.enabled', omc.enabled, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('omc.mode', omc.mode, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('omc.continuationEnforcement', omc.continuationEnforcement, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('omc.magicKeywords', omc.magicKeywords, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`OMC 配置已保存 (${omc.enabled ? '启用' : '禁用'}, 模式: ${omc.mode})`);
+        this.sendFullStatusDebounced();
+    }
+
+    async saveEmbeddingConfig(emb: any) {
+        const vscodeConfig = vscode.workspace.getConfiguration('augmentProxy');
+        await vscodeConfig.update('embedding.enabled', emb.enabled, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('embedding.provider', emb.provider, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('embedding.apiKey', emb.apiKey, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('embedding.baseUrl', emb.baseUrl, vscode.ConfigurationTarget.Global);
+        await vscodeConfig.update('embedding.model', emb.model, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`Embedding 配置已保存 (${emb.enabled ? '启用' : '禁用'}, ${emb.provider})`);
+        this.sendFullStatusDebounced();
+    }
+
     async sendFullStatus() {
         if (!this._view) return;
         const config = vscode.workspace.getConfiguration('augmentProxy');
@@ -84,6 +114,21 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
         configData.compressionThreshold = config.get('compressionThreshold', 80);
+        // Embedding 配置
+        configData.embedding = {
+            enabled: config.get('embedding.enabled', false),
+            provider: config.get('embedding.provider', 'glm'),
+            apiKey: config.get('embedding.apiKey', ''),
+            baseUrl: config.get('embedding.baseUrl', ''),
+            model: config.get('embedding.model', '')
+        };
+        // OMC 配置
+        configData.omc = {
+            enabled: config.get('omc.enabled', false),
+            mode: config.get('omc.mode', 'team'),
+            continuationEnforcement: config.get('omc.continuationEnforcement', true),
+            magicKeywords: config.get('omc.magicKeywords', true)
+        };
         this._view.webview.postMessage({
             type: 'fullStatus', proxyRunning: !!state.proxyServer,
             config: configData,
@@ -264,6 +309,35 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <div class="btn-row"><button id="startBtn">▶ 启动</button><button id="stopBtn" class="secondary">■ 停止</button></div>
     </div>
     <div class="section">
+        <div class="title">🚀 OMC 编排增强</div>
+        <div class="row" style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="omcEnabled" style="width: auto;">
+            <label for="omcEnabled" style="display: inline; margin: 0; font-size: 13px; opacity: 1;">启用 oh-my-claudecode</label>
+        </div>
+        <div id="omcOptions" style="display:none;">
+            <div class="row"><label>编排模式</label>
+                <select id="omcMode">
+                    <option value="team">Team (推荐) - 规范流水线</option>
+                    <option value="autopilot">Autopilot - 自主执行</option>
+                    <option value="ultrawork">Ultrawork - 极致性能</option>
+                    <option value="ralph">Ralph - 持久验证</option>
+                    <option value="ecomode">Ecomode - Token 高效</option>
+                    <option value="pipeline">Pipeline - 顺序处理</option>
+                </select>
+            </div>
+            <div class="row" style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="omcContinuation" checked style="width: auto;">
+                <label for="omcContinuation" style="display: inline; margin: 0; font-size: 12px;">持续执行强化</label>
+            </div>
+            <div class="row" style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="omcMagicKw" checked style="width: auto;">
+                <label for="omcMagicKw" style="display: inline; margin: 0; font-size: 12px;">魔法关键词</label>
+            </div>
+            <div class="info">关键词: ultrawork / search / analyze / ultrathink</div>
+            <button id="saveOmcBtn" class="small" style="margin-top: 4px;">保存 OMC 配置</button>
+        </div>
+    </div>
+    <div class="section">
         <div class="title">🧠 语义搜索</div>
         <div class="status"><span class="dot" id="embeddingDot"></span><span id="embeddingStatus">模型: 未加载</span></div>
         <div id="downloadProgress" style="display:none; margin: 8px 0;">
@@ -272,6 +346,27 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         </div>
         <div id="embeddingProgressRow" style="display:none; font-size: 11px; opacity: 0.8; margin: 4px 0;"><span>🔄 正在生成嵌入:</span><span id="embeddingProgressText" style="margin-left: 4px; color: #4caf50;">0/0</span></div>
         <div class="status" style="font-size: 11px; opacity: 0.8;"><span>缓存文档:</span><span id="cacheCount" style="margin-left: 4px;">0</span></div>
+        <div class="row" style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+            <input type="checkbox" id="embEnabled" style="width: auto;">
+            <label for="embEnabled" style="display: inline; margin: 0; font-size: 13px; opacity: 1;">启用语义搜索</label>
+        </div>
+        <div id="embOptions" style="display:none;">
+            <div class="row"><label>Embedding 供应商</label>
+                <select id="embProvider">
+                    <option value="glm">智谱 GLM embedding-3</option>
+                    <option value="openai">OpenAI text-embedding-3-small</option>
+                    <option value="custom">自定义 Embedding API</option>
+                </select>
+            </div>
+            <div class="row"><label>Embedding API Key</label>
+                <input type="password" id="embApiKey" placeholder="留空则使用 LLM 的 API Key">
+            </div>
+            <div id="embCustomRow" style="display:none;">
+                <div class="row"><label>自定义 Base URL</label><input type="text" id="embBaseUrl" placeholder="https://api.example.com/v1/embeddings"></div>
+                <div class="row"><label>自定义模型名称</label><input type="text" id="embModel" placeholder="留空使用默认"></div>
+            </div>
+            <button id="saveEmbBtn" class="small" style="margin-top: 4px;">保存 Embedding 配置</button>
+        </div>
     </div>
     <div class="section">
         <div class="title">📊 上下文状态</div>
@@ -341,6 +436,40 @@ document.getElementById('saveConfigBtn').onclick = () => {
         port: $port.value,
         format: $format.value,
         enableThinking: $enableThinking.checked
+    } });
+};
+// OMC 控制
+const $omcEnabled = document.getElementById('omcEnabled');
+const $omcOptions = document.getElementById('omcOptions');
+const $omcMode = document.getElementById('omcMode');
+const $omcContinuation = document.getElementById('omcContinuation');
+const $omcMagicKw = document.getElementById('omcMagicKw');
+$omcEnabled.onchange = () => { $omcOptions.style.display = $omcEnabled.checked ? 'block' : 'none'; };
+document.getElementById('saveOmcBtn').onclick = () => {
+    vscode.postMessage({ command: 'saveOmc', omc: {
+        enabled: $omcEnabled.checked,
+        mode: $omcMode.value,
+        continuationEnforcement: $omcContinuation.checked,
+        magicKeywords: $omcMagicKw.checked
+    } });
+};
+// Embedding 配置控制
+const $embEnabled = document.getElementById('embEnabled');
+const $embOptions = document.getElementById('embOptions');
+const $embProvider = document.getElementById('embProvider');
+const $embApiKey = document.getElementById('embApiKey');
+const $embBaseUrl = document.getElementById('embBaseUrl');
+const $embModel = document.getElementById('embModel');
+const $embCustomRow = document.getElementById('embCustomRow');
+$embEnabled.onchange = () => { $embOptions.style.display = $embEnabled.checked ? 'block' : 'none'; };
+$embProvider.onchange = () => { $embCustomRow.style.display = $embProvider.value === 'custom' ? 'block' : 'none'; };
+document.getElementById('saveEmbBtn').onclick = () => {
+    vscode.postMessage({ command: 'saveEmbedding', embedding: {
+        enabled: $embEnabled.checked,
+        provider: $embProvider.value,
+        apiKey: $embApiKey.value,
+        baseUrl: $embBaseUrl.value,
+        model: $embModel.value
     } });
 };
 function updateEmbeddingUI(status) {
@@ -419,6 +548,24 @@ window.addEventListener('message', e => {
             document.getElementById('contextBar').style.width = Math.min(usagePercent, 100) + '%';
             document.getElementById('contextBar').style.background = color;
             document.getElementById('contextExchanges').textContent = cs.total_exchanges + ' 次交互' + (cs.compressed ? ' (已压缩)' : '');
+        }
+        // 恢复 Embedding 配置状态
+        if (msg.config.embedding) {
+            $embEnabled.checked = msg.config.embedding.enabled || false;
+            $embOptions.style.display = msg.config.embedding.enabled ? 'block' : 'none';
+            $embProvider.value = msg.config.embedding.provider || 'glm';
+            $embApiKey.value = msg.config.embedding.apiKey || '';
+            $embBaseUrl.value = msg.config.embedding.baseUrl || '';
+            $embModel.value = msg.config.embedding.model || '';
+            $embCustomRow.style.display = msg.config.embedding.provider === 'custom' ? 'block' : 'none';
+        }
+        // 恢复 OMC 状态
+        if (msg.config.omc) {
+            $omcEnabled.checked = msg.config.omc.enabled || false;
+            $omcOptions.style.display = msg.config.omc.enabled ? 'block' : 'none';
+            $omcMode.value = msg.config.omc.mode || 'team';
+            $omcContinuation.checked = msg.config.omc.continuationEnforcement !== false;
+            $omcMagicKw.checked = msg.config.omc.magicKeywords !== false;
         }
     }
 });

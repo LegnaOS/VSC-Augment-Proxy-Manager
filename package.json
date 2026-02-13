@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -246,6 +246,42 @@
           "type": "boolean",
           "default": false,
           "description": "启用 Thinking (自定义 API 思考模式)"
+        },
+        "augmentProxy.omc.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "启用 oh-my-claudecode (OMC) 编排增强"
+        },
+        "augmentProxy.omc.mode": {
+          "type": "string",
+          "default": "team",
+          "enum": [
+            "team",
+            "autopilot",
+            "ultrawork",
+            "ralph",
+            "ecomode",
+            "pipeline"
+          ],
+          "enumDescriptions": [
+            "Team (推荐) - 规范流水线: 规划→需求→执行→验证→修复",
+            "Autopilot - 自主执行模式",
+            "Ultrawork - 最大并行度，极致性能",
+            "Ralph - 持久模式，验证/修复循环",
+            "Ecomode - Token 高效路由",
+            "Pipeline - 顺序分阶段处理"
+          ],
+          "description": "OMC 编排模式"
+        },
+        "augmentProxy.omc.continuationEnforcement": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用持续执行强化 (防止 AI 提前停止)"
+        },
+        "augmentProxy.omc.magicKeywords": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用魔法关键词 (ultrawork/search/analyze/ultrathink 自动增强提示)"
         },
         "augmentProxy.embedding.enabled": {
           "type": "boolean",

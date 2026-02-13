@@ -479,6 +479,11 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
     state.currentConfig.model = config.get(`${state.currentConfig.provider}.model`, DEFAULT_MODELS[state.currentConfig.provider]);
     if (state.currentConfig.provider === 'minimax') { state.currentConfig.enableCache = config.get('minimax.enableCache', true); state.currentConfig.enableInterleavedThinking = config.get('minimax.enableInterleavedThinking', true); }
     if (state.currentConfig.provider === 'deepseek') { state.currentConfig.enableThinking = config.get('deepseek.enableThinking', true); }
+    // OMC 配置初始化
+    state.currentConfig.omcEnabled = config.get('omc.enabled', false);
+    state.currentConfig.omcMode = config.get('omc.mode', 'team') as string;
+    state.currentConfig.omcContinuationEnforcement = config.get('omc.continuationEnforcement', true);
+    state.currentConfig.omcMagicKeywords = config.get('omc.magicKeywords', true);
     const storedKey = await extensionContext.secrets.get(`apiKey.${state.currentConfig.provider}`);
     if (storedKey) { state.currentConfig.apiKey = storedKey; }
     else {
@@ -548,6 +553,11 @@ export async function refreshConfig() {
     if (newProvider === 'deepseek') {
         state.currentConfig.enableThinking = config.get('deepseek.enableThinking', true);
     }
+    // OMC 配置
+    state.currentConfig.omcEnabled = config.get('omc.enabled', false);
+    state.currentConfig.omcMode = config.get('omc.mode', 'team') as string;
+    state.currentConfig.omcContinuationEnforcement = config.get('omc.continuationEnforcement', true);
+    state.currentConfig.omcMagicKeywords = config.get('omc.magicKeywords', true);
     // Provider 切换时重新读取 API Key
     if (newProvider !== oldProvider && state.extensionContext) {
         const storedKey = await state.extensionContext.secrets.get(`apiKey.${newProvider}`);
@@ -559,7 +569,7 @@ export async function refreshConfig() {
     }
     log(`[CONFIG] 🔄 配置已热更新: ${PROVIDER_NAMES[newProvider]} / ${state.currentConfig.model}`);
     updateStatusBar(true);
-    if (state.sidebarProvider) state.sidebarProvider.sendFullStatus();
+    if (state.sidebarProvider) state.sidebarProvider.sendFullStatusDebounced();
 }
 
 export async function stopProxy() {
