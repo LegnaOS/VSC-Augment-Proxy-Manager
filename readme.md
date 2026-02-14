@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.1.1-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -229,6 +229,27 @@ src/
 - 支持 GLM embedding-3 / OpenAI text-embedding-3-small / 自定义 API
 - 远程 API 失败自动回退本地模型
 - 远程/本地独立缓存，维度不冲突
+
+### v3.1.1
+- 🪟 **Windows 兼容性修复** — `proxy.localhost` DNS 解析失败改用 `127.0.0.1`，全平台通用
+- 🧠 **ONNX Runtime WASM 回退** — Windows 上 native DLL 加载失败时自动回退 WASM backend，确保 Embedding 功能可用
+
+### v3.1.0
+- 🔧 **文件编辑引擎重构** — 修复 AI 调用文件编辑工具后连接终止的致命 bug，三 Provider 全部重构为循环架构
+- 📊 **Diff 渲染** — 拦截的文件编辑操作实时渲染 diff 到聊天界面
+- 🎯 **强制精确编辑** — `save-file` 对已有文件直接拒绝，强制 AI 使用 `str-replace-editor`
+- 🔍 **OpenViking 上下文增强** — Viking L0/L1/L2 分层上下文，向量初筛 + 目录聚合 + 递归下钻
+
+### v3.0.1
+- 🛡️ **崩溃防护** — 修复 extension host 崩溃循环，OOM 防护，智能缓存检测
+- 🪞 **HuggingFace 镜像** — 支持镜像加速下载
+- 🎨 **UI 优化** — 侧边栏本地模型与远程 API 分区显示
+
+### v3.0.0
+- 🧠 **Viking 分层上下文** — L0 摘要 / L1 结构化 / L2 全文，三级按需加载
+- 🧬 **Session Memory** — 长期记忆，自动提取偏好和经验
+- 🌐 **远程 Embedding API** — 支持 GLM/OpenAI/自定义 API
+- 📦 **7 种本地模型** — MiniLM-L6/L12, BGE-Small/Base, E5-Multi-Small 等
 
 ### v2.1.5
 - 🚀 **OMC 编排增强** — 集成 oh-my-claudecode，6 种编排模式

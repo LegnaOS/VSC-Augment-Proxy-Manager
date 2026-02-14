@@ -617,11 +617,12 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
             // 零注入登录绕过：自动配置 Augment 扩展使用代理
             // 原理：设置 apiToken + completionURL 后 useOAuth 返回 false
             // QIe.requestAuthToken 直接返回 { token, tenantId, tenantUrl, expiresAt }
-            // NJe() 从 proxy.localhost 提取 "proxy" 作为 tenant ID
+            // NJe() 从 hostname 提取 tenant ID（proxy 模式下无关紧要）
+            // 用 127.0.0.1 而非 proxy.localhost — Windows 不支持 *.localhost 子域名 DNS 解析（ENOTFOUND）
             // 扩展的 config change listener 检测到变化后自动 reload
             // 零注入登录绕过：写入 augment.advanced 对象（VSCode 不支持点号路径写入嵌套 object 属性）
             try {
-                const proxyUrl = `http://proxy.localhost:${state.currentConfig.port}`;
+                const proxyUrl = `http://127.0.0.1:${state.currentConfig.port}`;
                 const augmentConfig = vscode.workspace.getConfiguration('augment');
                 const currentAdvanced = augmentConfig.get<any>('advanced', {}) || {};
                 const currentToken = currentAdvanced.apiToken || '';

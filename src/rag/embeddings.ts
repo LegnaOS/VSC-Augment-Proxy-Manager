@@ -239,7 +239,8 @@ export class SemanticEmbeddings {
     }
 
     // v2.1.0: 加载本地模型（可独立调用，支持切换模型）
-    async loadLocalModel(_retried = false): Promise<void> {
+    // v3.1.1: _wasmFallback — DLL/native binding 失败后自动回退 WASM backend
+    async loadLocalModel(_retried = false, _wasmFallback = false): Promise<void> {
         const modelInfo = LOCAL_MODELS.find(m => m.id === this.localModelId) || LOCAL_MODELS[0];
         this.modelLoading = true;
         this._cancelRequested = false;
@@ -247,7 +248,7 @@ export class SemanticEmbeddings {
         this.downloadFile = '';
         this.lastError = '';
         this.notifyStatus();
-        this.onProgress?.(`[RAG] 🧠 Loading transformers.js...`);
+        this.onProgress?.(`[RAG] 🧠 Loading transformers.js${_wasmFallback ? ' (WASM fallback)' : ''}...`);
 
         try {
             const { pipeline: tfPipeline, env } = await import('@huggingface/transformers');
@@ -274,7 +275,8 @@ export class SemanticEmbeddings {
                 this.onProgress?.(`[RAG] 📥 首次下载模型: ${modelInfo.name} (~${modelInfo.sizeMB}MB)...`);
             }
 
-            this.pipeline = await tfPipeline('feature-extraction', this.localModelId, {
+            // v3.1.1: WASM fallback — native DLL 失败时用 WASM backend
+            const pipelineOptions: any = {
                 progress_callback: isCached ? undefined : (progress: any) => {
                     // v3.0.0: 检查取消请求
                     if (this._cancelRequested) {
@@ -305,7 +307,12 @@ export class SemanticEmbeddings {
                         this.notifyStatus();
                     }
                 }
-            });
+            };
+            if (_wasmFallback) {
+                pipelineOptions.device = 'wasm';
+            }
+
+            this.pipeline = await tfPipeline('feature-extraction', this.localModelId, pipelineOptions);
 
             this.localDimensions = modelInfo.dimensions;
             this.modelReady = true;
@@ -313,7 +320,8 @@ export class SemanticEmbeddings {
             this.downloadProgress = 100;
             await this.loadCache();
             this.initialized = true;
-            this.onProgress?.(`[RAG] 🧠 Semantic engine ready: ${modelInfo.name} (${modelInfo.dimensions}d)`);
+            const backendLabel = _wasmFallback ? 'WASM' : 'native';
+            this.onProgress?.(`[RAG] 🧠 Semantic engine ready: ${modelInfo.name} (${modelInfo.dimensions}d, ${backendLabel})`);
             this.notifyStatus();
         } catch (err: any) {
             const cancelled = this._cancelRequested || (err.message && err.message.includes('DOWNLOAD_CANCELLED'));
@@ -329,8 +337,14 @@ export class SemanticEmbeddings {
                 this.notifyStatus();
                 return; // 取消不抛异常
             }
-            // v3.0.0: 检测缓存损坏（Protobuf parsing failed / failed to load 等），自动清理并重试一次
             const errMsg = err.message || '';
+            // v3.1.1: 检测 native DLL 加载失败 — 自动回退 WASM backend
+            const isDllFailure = /DLL initialization|onnxruntime_binding|native.*failed|\.node/i.test(errMsg);
+            if (isDllFailure && !_wasmFallback) {
+                this.onProgress?.(`[RAG] ⚠️ Native ONNX runtime failed, falling back to WASM backend...`);
+                return this.loadLocalModel(_retried, true);
+            }
+            // v3.0.0: 检测缓存损坏（Protobuf parsing failed / failed to load 等），自动清理并重试一次
             const isCorrupted = /protobuf parsing failed|failed to load.*onnx|invalid model|corrupted/i.test(errMsg);
             if (isCorrupted && !_retried) {
                 this.onProgress?.(`[RAG] ⚠️ Model cache corrupted, cleaning and retrying...`);
@@ -345,7 +359,7 @@ export class SemanticEmbeddings {
                     this.onProgress?.(`[RAG] ⚠️ Cache cleanup failed: ${cleanErr.message}`);
                 }
                 // 重试一次
-                return this.loadLocalModel(true);
+                return this.loadLocalModel(true, _wasmFallback);
             }
             this.lastError = errMsg || 'Failed to load model';
             this.onProgress?.(`[RAG] ❌ Model load failed: ${this.lastError}`);
