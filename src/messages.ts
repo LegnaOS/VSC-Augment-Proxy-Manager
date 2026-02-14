@@ -75,6 +75,17 @@ ${wsInfo.join('\n')}
 ${pathGuidance}
 </workspace_context>`);
     }
+    // 文件编辑工具使用规则 — 强制精确编辑
+    parts.push(`<file_editing_rules>
+CRITICAL FILE EDITING RULES — VIOLATION WILL CAUSE ERRORS:
+1. To MODIFY an existing file: ALWAYS use str-replace-editor (with command="str_replace", old_str, new_str) or apply_patch. These tools make precise, targeted edits.
+2. To CREATE a new file that does not exist: Use save-file.
+3. NEVER use save-file on a file that already exists — the operation WILL BE REJECTED with an error.
+4. When editing, provide the SMALLEST possible old_str that uniquely identifies the location. Do NOT regenerate the entire file content.
+5. If you need to make multiple changes to one file, use str-replace-editor with multiple replacement entries (old_str_1/new_str_1, old_str_2/new_str_2, etc.) in a single call.
+6. Before editing, use the view tool to read the current file content so your old_str matches exactly.
+</file_editing_rules>`);
+
     if (req.user_guidelines) {
         parts.push(`# User Guidelines\n${req.user_guidelines}`);
     }

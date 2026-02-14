@@ -764,6 +764,7 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
 
             // 应用所有 patches
             const results: string[] = [];
+            const allDiffs: Array<{ file: string; oldStr: string; newStr: string }> = [];
             for (const patch of parsedPatches) {
                 log(`[INTERCEPT] apply_patch: applying patch to ${patch.filePath}`);
                 log(`[DEBUG] apply_patch oldContent (${patch.oldContent.length} chars):\n${patch.oldContent.substring(0, 200)}...`);
@@ -799,6 +800,10 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                 if (result?.intercepted && result.result) {
                     if (result.result.success) {
                         results.push(`✅ ${patch.filePath}: ${result.result.message || 'success'}`);
+                        // 聚合子结果的 diffs
+                        if (result.result.diffs) {
+                            allDiffs.push(...result.result.diffs);
+                        }
                     } else {
                         results.push(`❌ ${patch.filePath}: ${result.result.error || 'failed'}`);
                     }
@@ -813,7 +818,8 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                 intercepted: true,
                 result: {
                     success: allSuccess,
-                    message: results.join('\n')
+                    message: results.join('\n'),
+                    diffs: allDiffs
                 }
             };
 
@@ -904,7 +910,11 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                     toolName,
                     input,
                     intercepted: true,
-                    result: { success: true, message: `Successfully inserted at line ${lineNum} in ${filePath}` }
+                    result: {
+                        success: true,
+                        message: `Successfully inserted at line ${lineNum} in ${filePath}`,
+                        diffs: [{ file: filePath, oldStr: '', newStr }]
+                    }
                 };
             }
 
@@ -952,6 +962,7 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                 log(`[INTERCEPT] str-replace-editor: processing ${replacements.length} replacement(s)`);
 
                 // 按顺序执行所有替换
+                const diffs: Array<{ file: string; oldStr: string; newStr: string }> = [];
                 for (let i = 0; i < replacements.length; i++) {
                     const { oldStr, newStr, startLine, endLine } = replacements[i];
 
@@ -972,6 +983,7 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
 
                     // 执行替换
                     content = content.substring(0, match.index) + newStr + content.substring(match.index + match.matchedStr.length);
+                    diffs.push({ file: filePath, oldStr: match.matchedStr, newStr });
                     log(`[INTERCEPT] str-replace-editor: replacement ${i + 1}/${replacements.length} succeeded`);
                 }
 
@@ -987,7 +999,7 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
                     toolName,
                     input,
                     intercepted: true,
-                    result: { success: true, message: `Successfully applied ${replacements.length} replacement(s) to ${filePath}` }
+                    result: { success: true, message: `Successfully applied ${replacements.length} replacement(s) to ${filePath}`, diffs }
                 };
             }
 
@@ -1038,26 +1050,44 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
         const fullPath = path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
 
         if (fs.existsSync(fullPath)) {
-            log(`[INTERCEPT] ⚠️ save-file on existing file: directly overwriting ${filePath}`);
+            log(`[INTERCEPT] ❌ save-file REJECTED on existing file: ${filePath} — must use str-replace-editor or apply_patch`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: {
+                    success: false,
+                    error: `REJECTED: File "${filePath}" already exists. You MUST use str-replace-editor (command: str_replace) or apply_patch to make targeted edits to existing files. save-file is ONLY for creating NEW files that do not exist yet. Re-read the file with the view tool, then use str-replace-editor with old_str/new_str to make precise changes.`
+                }
+            };
+        }
 
-            try {
-                fs.writeFileSync(fullPath, fileContent, 'utf-8');
-                log(`[INTERCEPT] ✅ save-file: successfully overwrote ${filePath}`);
-                return {
-                    toolName,
-                    input,
-                    intercepted: true,
-                    result: { success: true, message: `Successfully saved ${filePath}` }
-                };
-            } catch (e: any) {
-                log(`[INTERCEPT] save-file error: ${e.message}`);
-                return {
-                    toolName,
-                    input,
-                    intercepted: true,
-                    result: { success: false, error: e.message }
-                };
+        // 文件不存在 → 新建文件，本地直接执行
+        try {
+            const dir = path.dirname(fullPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
             }
+            fs.writeFileSync(fullPath, fileContent, 'utf-8');
+            log(`[INTERCEPT] ✅ save-file: created new file ${filePath}`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: {
+                    success: true,
+                    message: `Created new file ${filePath}`,
+                    diffs: [{ file: filePath, oldStr: '', newStr: fileContent }]
+                }
+            };
+        } catch (e: any) {
+            log(`[INTERCEPT] save-file create error: ${e.message}`);
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: { success: false, error: e.message }
+            };
         }
     }
 
@@ -1065,6 +1095,53 @@ export function convertOrInterceptFileEdit(toolName: string, input: any, workspa
 }
 
 // ========== 处理工具调用并转换为 Augment 格式 ==========
+// ========== 渲染 diff 文本供流式输出 ==========
+export function renderDiffText(interceptResult: any, toolName: string): string {
+    if (!interceptResult) return '';
+    const diffs: Array<{ file: string; oldStr: string; newStr: string }> = interceptResult.diffs;
+    if (!diffs || diffs.length === 0) {
+        // 没有 diff 数据，只返回状态
+        return interceptResult.success ? `\n✅ ${toolName}\n` : `\n❌ ${toolName} failed\n`;
+    }
+
+    const parts: string[] = [];
+    for (const diff of diffs) {
+        const fileName = diff.file;
+        const oldLines = (diff.oldStr || '').split('\n');
+        const newLines = (diff.newStr || '').split('\n');
+
+        // 新建文件
+        if (!diff.oldStr && diff.newStr) {
+            const preview = newLines.slice(0, 15);
+            parts.push(`\n✅ **${toolName}** → \`${fileName}\` (新建)\n\`\`\`\n${preview.join('\n')}${newLines.length > 15 ? '\n... (+' + (newLines.length - 15) + ' lines)' : ''}\n\`\`\`\n`);
+            continue;
+        }
+
+        // 完整文件覆盖（太大则跳过详细diff）
+        if (oldLines.length > 50 && newLines.length > 50) {
+            parts.push(`\n✅ **${toolName}** → \`${fileName}\` (${oldLines.length} → ${newLines.length} lines)\n`);
+            continue;
+        }
+
+        // 计算行级 diff
+        const removed: string[] = [];
+        const added: string[] = [];
+        const maxShow = 12;
+
+        for (const line of oldLines) {
+            if (removed.length < maxShow) removed.push(`- ${line}`);
+        }
+        if (oldLines.length > maxShow) removed.push(`  ... (${oldLines.length - maxShow} more removed)`);
+        for (const line of newLines) {
+            if (added.length < maxShow) added.push(`+ ${line}`);
+        }
+        if (newLines.length > maxShow) added.push(`  ... (${newLines.length - maxShow} more added)`);
+
+        parts.push(`\n✅ **${toolName}** → \`${fileName}\`\n\`\`\`diff\n${removed.join('\n')}\n${added.join('\n')}\n\`\`\`\n`);
+    }
+    return parts.join('') || (interceptResult.success ? `\n✅ ${toolName}\n` : `\n❌ ${toolName} failed\n`);
+}
+
 // 🔧 重构：使用 fixToolCallInput() 替代重复的内联逻辑
 // 🔧 新增：智能工具转换和拦截（edit-file/save-file/str-replace-editor）
 // 返回值：

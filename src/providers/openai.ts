@@ -5,7 +5,7 @@ import { URL } from 'url';
 import { state, log } from '../globals';
 import { OpenAIRequestResult } from '../types';
 import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError } from '../messages';
-import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment } from '../tools';
+import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
 
 // ========== 执行单次 OpenAI API 请求（真流式） ==========
@@ -237,7 +237,7 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
     const apiKey = state.currentConfig.apiKey;
     const model = state.currentConfig.model;
 
-    const MAX_ITERATIONS = 5;
+    const MAX_ITERATIONS = 25;
     let iteration = 0;
     let currentMessages = [...openaiMessages];
     let accumulatedText = '';
@@ -274,41 +274,89 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
             log(`[LOOP] Tool calls: codebase_search=${codebaseSearchCalls.length}, other=${otherToolCalls.length}`);
 
             if (otherToolCalls.length > 0) {
-                log(`[LOOP] Has other tool calls, forwarding to Augment`);
+                log(`[LOOP] Has other tool calls, processing...`);
 
-                if (codebaseSearchCalls.length > 0) {
-                    const csToolCalls = codebaseSearchCalls.map((cs: any) => ({
-                        id: cs.id, type: 'function',
-                        function: { name: 'codebase_search', arguments: JSON.stringify({ query: cs.query }) }
-                    }));
-                    currentMessages.push({ role: 'assistant', content: result.text || null, tool_calls: csToolCalls });
+                // 分离拦截的和非拦截的工具调用
+                const interceptedTools: Array<{ tc: any; toolNode: any }> = [];
+                const nonInterceptedTools: Array<{ tc: any; toolNode: any }> = [];
 
-                    for (const cs of codebaseSearchCalls) {
-                        const searchResult = await executeRAGSearch(cs.query);
-                        currentMessages.push({ role: 'tool', tool_call_id: cs.id, content: searchResult });
+                for (const tc of otherToolCalls) {
+                    const toolNode = await processToolCallForAugment(tc, workspaceInfo, result.finishReason);
+                    if (!toolNode) continue;
+
+                    if (toolNode.type === 1) {
+                        interceptedTools.push({ tc, toolNode });
+                        log(`[LOOP] Tool ${tc.name} intercepted locally`);
+                    } else {
+                        nonInterceptedTools.push({ tc, toolNode });
+                    }
+                }
+
+                if (nonInterceptedTools.length > 0) {
+                    // 有非拦截的工具 → 发给 Augment 执行
+                    for (const { toolNode } of nonInterceptedTools) {
+                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+                    }
+                    // 拦截的工具结果也作为 tool_result 发给 Augment
+                    for (const { toolNode } of interceptedTools) {
+                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
+                    }
+                    res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
+                    res.end();
+                    return;
+                }
+
+                // ✅ 所有工具都被拦截了 → 把结果送回 AI 继续生成
+                // 1. 构建 assistant message（包含 tool_calls）
+                const allToolCalls = [...otherToolCalls, ...codebaseSearchCalls.map((cs: any) => ({
+                    id: cs.id, name: 'codebase_search', arguments: JSON.stringify({ query: cs.query })
+                }))];
+                const assistantToolCallsMsg = allToolCalls.map((tc: any) => ({
+                    id: tc.id,
+                    type: 'function' as const,
+                    function: {
+                        name: tc.name,
+                        arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {})
+                    }
+                }));
+                currentMessages.push({
+                    role: 'assistant',
+                    content: result.text || null,
+                    tool_calls: assistantToolCallsMsg
+                });
+
+                // 2. 添加拦截工具的执行结果作为 tool message
+                for (const { tc, toolNode } of interceptedTools) {
+                    currentMessages.push({
+                        role: 'tool',
+                        tool_call_id: tc.id,
+                        content: toolNode.tool_result_node.content
+                    });
+                    // 流式显示执行状态和 diff 给用户
+                    try {
+                        const resultObj = JSON.parse(toolNode.tool_result_node.content);
+                        const diffText = renderDiffText(resultObj, tc.name);
+                        res.write(JSON.stringify({ text: diffText, nodes: [], stop_reason: 0 }) + '\n');
+                    } catch {
                         res.write(JSON.stringify({
-                            text: `\n\n📚 **已搜索代码库** (查询: "${cs.query.substring(0, 30)}...")\n\n`,
+                            text: `\n✅ ${tc.name} executed\n`,
                             nodes: [], stop_reason: 0
                         }) + '\n');
                     }
-                    continue;
                 }
 
-                // 处理其他工具调用（可能被拦截或转发给 Augment）
-                for (const tc of otherToolCalls) {
-                    const toolNode = await processToolCallForAugment(tc, workspaceInfo, result.finishReason);
-                    if (toolNode) {
-                        res.write(JSON.stringify({ text: '', nodes: [toolNode], stop_reason: 0 }) + '\n');
-
-                        // 如果是拦截的工具（type=1 tool_result），不需要等待 Augment 响应，直接继续
-                        if (toolNode.type === 1) {
-                            log(`[LOOP] Tool ${tc.name} was intercepted, result sent back to AI`);
-                        }
-                    }
+                // 3. 同时处理 codebase_search（如果有）
+                for (const cs of codebaseSearchCalls) {
+                    const searchResult = await executeRAGSearch(cs.query);
+                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, content: searchResult });
+                    res.write(JSON.stringify({
+                        text: `\n📚 **代码库搜索** ("${cs.query.substring(0, 30)}...")\n`,
+                        nodes: [], stop_reason: 0
+                    }) + '\n');
                 }
-                res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
-                res.end();
-                return;
+
+                log(`[LOOP] All ${interceptedTools.length} tools intercepted, feeding results back to AI`);
+                continue; // ← 关键：继续循环，AI 看到工具结果后继续生成
             }
 
             if (codebaseSearchCalls.length > 0) {
