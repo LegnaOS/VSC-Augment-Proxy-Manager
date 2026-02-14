@@ -232,7 +232,7 @@ src/
 
 ### v3.1.1
 - 🪟 **Windows 兼容性修复** — `proxy.localhost` DNS 解析失败改用 `127.0.0.1`，全平台通用
-- 🧠 **ONNX Runtime WASM 回退** — Windows 上 native DLL 加载失败时自动回退 WASM backend，确保 Embedding 功能可用
+- 🧠 **Sharp 模块兼容性修复** — Mock `sharp` 模块避免 Windows 上 native binding 失败，确保本地 Embedding 模型可用
 
 ### v3.1.0
 - 🔧 **文件编辑引擎重构** — 修复 AI 调用文件编辑工具后连接终止的致命 bug，三 Provider 全部重构为循环架构

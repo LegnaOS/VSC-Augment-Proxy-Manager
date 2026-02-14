@@ -239,8 +239,8 @@ export class SemanticEmbeddings {
     }
 
     // v2.1.0: 加载本地模型（可独立调用，支持切换模型）
-    // v3.1.1: _wasmFallback — DLL/native binding 失败后自动回退 WASM backend
-    async loadLocalModel(_retried = false, _wasmFallback = false): Promise<void> {
+    // v3.1.1: Mock sharp 模块以避免 Windows 上 native binding 失败
+    async loadLocalModel(_retried = false): Promise<void> {
         const modelInfo = LOCAL_MODELS.find(m => m.id === this.localModelId) || LOCAL_MODELS[0];
         this.modelLoading = true;
         this._cancelRequested = false;
@@ -248,10 +248,28 @@ export class SemanticEmbeddings {
         this.downloadFile = '';
         this.lastError = '';
         this.notifyStatus();
-        this.onProgress?.(`[RAG] 🧠 Loading transformers.js${_wasmFallback ? ' (WASM fallback)' : ''}...`);
+        this.onProgress?.(`[RAG] 🧠 Loading transformers.js...`);
 
         try {
-            const { pipeline: tfPipeline, env } = await import('@huggingface/transformers');
+            // v3.1.1: Mock sharp 模块 — Windows 上 native binding 可能失败
+            // sharp 仅用于图像处理，文本 Embedding 不需要
+            const Module = require('module');
+            const originalRequire = Module.prototype.require;
+            Module.prototype.require = function(this: any, id: string) {
+                if (id === 'sharp') {
+                    return null; // transformers.js 会跳过图像处理功能
+                }
+                return originalRequire.apply(this, arguments);
+            };
+
+            let transformers: any;
+            try {
+                transformers = await import('@huggingface/transformers');
+            } finally {
+                Module.prototype.require = originalRequire;
+            }
+
+            const { pipeline: tfPipeline, env } = transformers;
             env.cacheDir = path.join(this.cacheDir, 'models');
             env.allowLocalModels = true;
             // v3.0.0: 使用镜像加速下载
@@ -275,7 +293,6 @@ export class SemanticEmbeddings {
                 this.onProgress?.(`[RAG] 📥 首次下载模型: ${modelInfo.name} (~${modelInfo.sizeMB}MB)...`);
             }
 
-            // v3.1.1: WASM fallback — native DLL 失败时用 WASM backend
             const pipelineOptions: any = {
                 progress_callback: isCached ? undefined : (progress: any) => {
                     // v3.0.0: 检查取消请求
@@ -308,9 +325,6 @@ export class SemanticEmbeddings {
                     }
                 }
             };
-            if (_wasmFallback) {
-                pipelineOptions.device = 'wasm';
-            }
 
             this.pipeline = await tfPipeline('feature-extraction', this.localModelId, pipelineOptions);
 
@@ -320,8 +334,7 @@ export class SemanticEmbeddings {
             this.downloadProgress = 100;
             await this.loadCache();
             this.initialized = true;
-            const backendLabel = _wasmFallback ? 'WASM' : 'native';
-            this.onProgress?.(`[RAG] 🧠 Semantic engine ready: ${modelInfo.name} (${modelInfo.dimensions}d, ${backendLabel})`);
+            this.onProgress?.(`[RAG] 🧠 Semantic engine ready: ${modelInfo.name} (${modelInfo.dimensions}d)`);
             this.notifyStatus();
         } catch (err: any) {
             const cancelled = this._cancelRequested || (err.message && err.message.includes('DOWNLOAD_CANCELLED'));
@@ -338,12 +351,6 @@ export class SemanticEmbeddings {
                 return; // 取消不抛异常
             }
             const errMsg = err.message || '';
-            // v3.1.1: 检测 native DLL 加载失败 — 自动回退 WASM backend
-            const isDllFailure = /DLL initialization|onnxruntime_binding|native.*failed|\.node/i.test(errMsg);
-            if (isDllFailure && !_wasmFallback) {
-                this.onProgress?.(`[RAG] ⚠️ Native ONNX runtime failed, falling back to WASM backend...`);
-                return this.loadLocalModel(_retried, true);
-            }
             // v3.0.0: 检测缓存损坏（Protobuf parsing failed / failed to load 等），自动清理并重试一次
             const isCorrupted = /protobuf parsing failed|failed to load.*onnx|invalid model|corrupted/i.test(errMsg);
             if (isCorrupted && !_retried) {
@@ -359,7 +366,7 @@ export class SemanticEmbeddings {
                     this.onProgress?.(`[RAG] ⚠️ Cache cleanup failed: ${cleanErr.message}`);
                 }
                 // 重试一次
-                return this.loadLocalModel(true, _wasmFallback);
+                return this.loadLocalModel(true);
             }
             this.lastError = errMsg || 'Failed to load model';
             this.onProgress?.(`[RAG] ❌ Model load failed: ${this.lastError}`);
