@@ -251,13 +251,13 @@ export class SemanticEmbeddings {
         this.onProgress?.(`[RAG] 🧠 Loading transformers.js...`);
 
         try {
-            // v3.1.1: Mock sharp 模块 — Windows 上 native binding 可能失败
-            // sharp 仅用于图像处理，文本 Embedding 不需要
+            // v3.1.3: 增强 sharp 模块 mock — 完全禁用图像处理功能
             const Module = require('module');
             const originalRequire = Module.prototype.require;
             Module.prototype.require = function(this: any, id: string) {
                 if (id === 'sharp') {
-                    return null; // transformers.js 会跳过图像处理功能
+                    // 返回一个空对象，避免 transformers.js 尝试加载
+                    return {};
                 }
                 return originalRequire.apply(this, arguments);
             };
@@ -270,6 +270,11 @@ export class SemanticEmbeddings {
             }
 
             const { pipeline: tfPipeline, env } = transformers;
+
+            // v3.1.3: 显式禁用图像处理器
+            env.useCustomCache = false;
+            env.useBrowserCache = false;
+
             env.cacheDir = path.join(this.cacheDir, 'models');
             env.allowLocalModels = true;
             // v3.0.0: 使用镜像加速下载
@@ -369,7 +374,13 @@ export class SemanticEmbeddings {
                 return this.loadLocalModel(true);
             }
             this.lastError = errMsg || 'Failed to load model';
-            this.onProgress?.(`[RAG] ❌ Model load failed: ${this.lastError}`);
+            // v3.1.3: 忽略图像处理库错误，降级到 BM25 模式
+            if (errMsg.includes('image processing library') || errMsg.includes('sharp')) {
+                this.onProgress?.(`[RAG] ⚠️ Image processing disabled (text-only mode)`);
+                this.onProgress?.(`[RAG] ℹ️ Falling back to BM25 mode`);
+            } else {
+                this.onProgress?.(`[RAG] ❌ Model load failed: ${this.lastError}`);
+            }
             this.notifyStatus();
             throw err;
         }

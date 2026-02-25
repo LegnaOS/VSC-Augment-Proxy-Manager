@@ -41,16 +41,37 @@ export const DEFAULT_MODELS: Record<string, string> = {
 // 判断是否为 Anthropic 格式
 // DeepSeek 和 Kimi Anthropic 提供 Anthropic 兼容 API
 export function isAnthropicFormat(provider: string): boolean {
+    // v3.1.5: 支持 custom provider 的 format 配置
+    if (provider === 'custom') {
+        const vscode = require('vscode');
+        const config = vscode.workspace.getConfiguration('augmentProxy');
+        const format = config.get('custom.format', 'openai');
+        return format === 'anthropic';
+    }
     return ['anthropic', 'minimax', 'deepseek', 'kimi-anthropic'].includes(provider);
 }
 
 // 判断是否为 OpenAI 格式
 export function isOpenAIFormat(provider: string): boolean {
+    // v3.1.5: 支持 custom provider 的 format 配置
+    if (provider === 'custom') {
+        const vscode = require('vscode');
+        const config = vscode.workspace.getConfiguration('augmentProxy');
+        const format = config.get('custom.format', 'openai');
+        return format === 'openai';
+    }
     return ['openai', 'glm', 'kimi'].includes(provider);
 }
 
 // 判断是否为 Google 格式
 export function isGoogleFormat(provider: string): boolean {
+    // v3.1.5: 支持 custom provider 的 format 配置
+    if (provider === 'custom') {
+        const vscode = require('vscode');
+        const config = vscode.workspace.getConfiguration('augmentProxy');
+        const format = config.get('custom.format', 'openai');
+        return format === 'google';
+    }
     return provider === 'google';
 }
 

@@ -26,6 +26,7 @@ function executeAnthropicRequest(
         const url = new URL(state.currentConfig.baseUrl);
         const headers: any = {
             'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(apiBody),
             'x-api-key': state.currentConfig.apiKey,
             'anthropic-version': '2023-06-01'
         };
@@ -33,7 +34,15 @@ function executeAnthropicRequest(
             headers['User-Agent'] = 'KimiCLI/0.77';
         }
         const isHttps = url.protocol === 'https:';
-        const options = { hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', headers };
+        // 构建完整的 path（包含 pathname 和 search）
+        const fullPath = url.pathname + (url.search || '');
+        const options = {
+            hostname: url.hostname,
+            port: url.port || (isHttps ? 443 : 80),
+            path: fullPath,
+            method: 'POST',
+            headers
+        };
         log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages`);
 
         const result: AnthropicResult = { text: '', toolCalls: [], stopReason: '' };
@@ -56,11 +65,26 @@ function executeAnthropicRequest(
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
                 for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) continue;
+
+                    // 支持标准 SSE 格式（event: xxx 和 data: xxx）
+                    if (trimmedLine.startsWith('event:')) continue;
+                    if (!trimmedLine.startsWith('data: ')) continue;
                     const data = line.slice(6).trim();
                     if (!data || data === '[DONE]') continue;
                     try {
                         const event = JSON.parse(data);
+
+                        // 处理 message_start 事件
+                        if (event.type === 'message_start') continue;
+
+                        // 处理 ping 事件
+                        if (event.type === 'ping') continue;
+
+                        // 处理 message_stop 事件
+                        if (event.type === 'message_stop') continue;
+
                         if (event.type === 'content_block_start' && event.content_block?.type === 'thinking' && shouldShowThinking) {
                             isInThinkingBlock = true;
                             onTextDelta('<think>\n');
@@ -91,7 +115,9 @@ function executeAnthropicRequest(
                         if (event.type === 'message_delta' && event.delta?.stop_reason) {
                             result.stopReason = event.delta.stop_reason;
                         }
-                    } catch {}
+                    } catch (e) {
+                        log(`[SSE] JSON parse error: ${e}`);
+                    }
                 }
             });
             apiRes.on('end', () => {
@@ -134,10 +160,33 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     const initialMessages = augmentToAnthropicMessages(augmentReq);
     let currentMessages = [...initialMessages];
     const MAX_ITERATIONS = 25;
+    const TOOL_RESULT_SIZE_LIMIT = 50000; // 50KB 工具结果大小限制
 
-    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    // 禁用缓冲，立即刷新响应
+    res.writeHead(200, {
+        'Content-Type': 'application/x-ndjson',
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    });
+
+    // 心跳保活机制
+    const heartbeat = setInterval(() => {
+        if (!res.writableEnded) {
+            try {
+                res.write('\n'); // 发送空行保持连接
+            } catch {}
+        }
+    }, 30000);
+
+    res.on('close', () => clearInterval(heartbeat));
+
     const onTextDelta = (delta: string) => {
-        try { res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n'); } catch {}
+        try {
+            res.write(JSON.stringify({ text: delta, nodes: [], stop_reason: 0 }) + '\n');
+            // 立即刷新缓冲区
+            if ((res as any).flush) (res as any).flush();
+        } catch {}
     };
 
     try {
@@ -147,6 +196,7 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
 
             if (result.toolCalls.length === 0 || result.stopReason === 'end_turn') {
                 res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
+                clearInterval(heartbeat);
                 res.end();
                 return;
             }
@@ -160,6 +210,17 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
                 const interceptResult = convertOrInterceptFileEdit(tc.name, input, workspaceInfo);
 
                 if (interceptResult && interceptResult.intercepted) {
+                    // 截断过大的工具结果
+                    let resultContent = JSON.stringify(interceptResult.result);
+                    if (resultContent.length > TOOL_RESULT_SIZE_LIMIT) {
+                        log(`[LOOP] Tool result truncated: ${resultContent.length} -> ${TOOL_RESULT_SIZE_LIMIT} bytes`);
+                        resultContent = resultContent.slice(0, TOOL_RESULT_SIZE_LIMIT) + '\n[...内容过长已截断]';
+                        try {
+                            interceptResult.result = JSON.parse(resultContent.startsWith('{') ? resultContent : '{"content":"' + resultContent + '"}');
+                        } catch {
+                            interceptResult.result = { content: resultContent };
+                        }
+                    }
                     interceptedTools.push({ tc, interceptResult: interceptResult.result });
                     log(`[LOOP] Tool ${tc.name} intercepted locally`);
                 } else {
@@ -183,7 +244,10 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
                         type: 1, tool_result_node: { tool_use_id: tc.id, content: JSON.stringify(interceptResult) }
                     }], stop_reason: 0 }) + '\n');
                 }
+                // 立即刷新
+                if ((res as any).flush) (res as any).flush();
                 res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
+                clearInterval(heartbeat);
                 res.end();
                 return;
             }

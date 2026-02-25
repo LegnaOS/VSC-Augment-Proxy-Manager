@@ -5,7 +5,7 @@ import { state, log } from './globals';
 export async function applyContextCompression(augmentReq: any, providerName: string = 'unknown') {
     const config = vscode.workspace.getConfiguration('augmentProxy');
     const enableCompression = config.get('enableContextCompression', true) as boolean;
-    const compressionThresholdPercent = config.get('compressionThreshold', 80) as number;
+    const compressionThresholdPercent = config.get('compressionThreshold', 60) as number; // 降低到 60%
     const compressionThreshold = compressionThresholdPercent / 100;
 
     if (!enableCompression || !augmentReq.chat_history || augmentReq.chat_history.length === 0) return;
@@ -29,8 +29,14 @@ export async function applyContextCompression(augmentReq: any, providerName: str
         });
     }
 
-    if (contextStats.needs_compression) {
-        const compressionResult = await compressChatHistoryByTokens(augmentReq.chat_history, tokenLimit, 0.4, compressionThreshold);
+    // 预压缩：在 50% 时就开始主动压缩
+    const preemptiveThreshold = 0.5;
+    if (contextStats.usage_percentage > (preemptiveThreshold * 100)) {
+        log(`[CONTEXT] ⚡ 预压缩触发 (${contextStats.usage_percentage.toFixed(1)}% > ${preemptiveThreshold * 100}%)`);
+    }
+
+    if (contextStats.needs_compression || contextStats.usage_percentage > (preemptiveThreshold * 100)) {
+        const compressionResult = await compressChatHistoryByTokens(augmentReq.chat_history, tokenLimit, 0.3, compressionThreshold); // 目标 30%
         if (compressionResult.compressed_count < compressionResult.original_count) {
             augmentReq.chat_history = compressionResult.compressed_exchanges;
             log(`[CONTEXT] ✂️ 压缩: ${compressionResult.original_count} → ${compressionResult.compressed_count} 次交互`);
