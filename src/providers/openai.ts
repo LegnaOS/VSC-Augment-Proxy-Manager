@@ -1,6 +1,7 @@
 // ===== OpenAI 格式 API 转发（OpenAI / GLM）=====
 
 import * as https from 'https';
+import * as http from 'http';
 import { URL } from 'url';
 import { state, log } from '../globals';
 import { OpenAIRequestResult } from '../types';
@@ -54,7 +55,7 @@ export async function executeOpenAIRequest(
 
         const options = {
             hostname: url.hostname,
-            port: url.port || 443,
+            port: url.port || (url.protocol === 'https:' ? 443 : 80),
             path: url.pathname,
             method: 'POST',
             headers
@@ -65,7 +66,8 @@ export async function executeOpenAIRequest(
         let inThinking = false;
         const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
 
-        const apiReq = https.request(options, (apiRes: any) => {
+        const httpModule = url.protocol === 'https:' ? https : http;
+        const apiReq = httpModule.request(options, (apiRes: any) => {
             if (apiRes.statusCode !== 200) {
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);

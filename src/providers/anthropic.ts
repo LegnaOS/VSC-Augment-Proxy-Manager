@@ -1,6 +1,7 @@
 // ===== Anthropic 格式 API 转发（Anthropic / MiniMax / DeepSeek）=====
 
 import * as https from 'https';
+import * as http from 'http';
 import { URL } from 'url';
 import { state, log } from '../globals';
 import { augmentToAnthropicMessages, buildSystemPrompt, extractWorkspaceInfo } from '../messages';
@@ -31,7 +32,8 @@ function executeAnthropicRequest(
         if (state.currentConfig.provider === 'kimi-anthropic') {
             headers['User-Agent'] = 'KimiCLI/0.77';
         }
-        const options = { hostname: url.hostname, port: url.port || 443, path: url.pathname, method: 'POST', headers };
+        const isHttps = url.protocol === 'https:';
+        const options = { hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, method: 'POST', headers };
         log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages`);
 
         const result: AnthropicResult = { text: '', toolCalls: [], stopReason: '' };
@@ -41,7 +43,8 @@ function executeAnthropicRequest(
         const shouldShowThinking = (state.currentConfig.provider === 'minimax' && state.currentConfig.enableInterleavedThinking) ||
             (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking);
 
-        const apiReq = https.request(options, (apiRes) => {
+        const httpModule = isHttps ? https : http;
+        const apiReq = httpModule.request(options, (apiRes) => {
             if (apiRes.statusCode !== 200) {
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);
