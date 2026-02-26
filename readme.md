@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.1.1-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.1.4-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -157,6 +157,13 @@ src/
 
 ## 更新日志
 
+### v3.1.4 — Agent 循环修复 + 任务系统生效
+
+**🔴 致命修复**
+- **修复 Agent 执行一次操作后就停止的 bug** — Anthropic/OpenAI provider 的 stop_reason 判断逻辑错误：当 AI 返回工具调用（如 `view` 读文件）时，因 `stopReason === 'end_turn'` 被错误判定为对话结束，导致后续任务永远不会执行。现在只检查 `toolCalls.length === 0`，与 Google provider 保持一致
+- **修复任务列表工具不生效** — `view_tasklist`、`update_tasks`、`add_tasks`、`reorganize_tasklist` 四个工具只有 system prompt 文字描述，缺少 JSON Schema 工具定义注入。AI 模型在 API 的 `tools` 参数中看不到这些工具，无法可靠调用。现在三个 provider 均注入完整 schema
+- **修复 Viking L0 上下文注入无效** — `proxy.ts` 将 Viking L0 写入 `augmentReq.system_prompt`，但 `buildSystemPrompt()` 从不读取该字段，导致上下文被静默丢弃。现在正确合并
+
 ### v3.1.0 — 文件编辑引擎重构 + Diff 渲染
 
 **🔧 文件编辑引擎重构（核心改进）**
@@ -229,6 +236,11 @@ src/
 - 支持 GLM embedding-3 / OpenAI text-embedding-3-small / 自定义 API
 - 远程 API 失败自动回退本地模型
 - 远程/本地独立缓存，维度不冲突
+
+### v3.1.4
+- 🔴 **致命修复** — Agent 执行一次操作后就停止（stop_reason 判断逻辑错误）
+- 🔧 **任务系统生效** — 四个任务列表工具注入完整 JSON Schema 定义
+- 🔧 **Viking L0 上下文修复** — 上下文注入不再被静默丢弃
 
 ### v3.1.1
 - 🪟 **Windows 兼容性修复** — `proxy.localhost` DNS 解析失败改用 `127.0.0.1`，全平台通用

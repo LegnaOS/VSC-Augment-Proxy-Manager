@@ -96,19 +96,21 @@ function parseAugmentPatch(lines: string[], startIndex: number, filePath: string
         }
 
         // - 开头：删除的行（只在 oldContent 中）
-        // 注意：- 后面有一个空格
-        if (line.startsWith('- ')) {
+        // 支持 "- " 或 "-" (有无空格都支持)
+        if (line.startsWith('-')) {
             hasAnyDiffMarkers = true;
-            oldLines.push(line.substring(2)); // 去掉 "- "
+            const content = line.startsWith('- ') ? line.substring(2) : line.substring(1);
+            oldLines.push(content);
             i++;
             continue;
         }
 
         // + 开头：添加的行（只在 newContent 中）
-        // 注意：+ 后面有一个空格
-        if (line.startsWith('+ ')) {
+        // 支持 "+ " 或 "+" (有无空格都支持)
+        if (line.startsWith('+')) {
             hasAnyDiffMarkers = true;
-            newLines.push(line.substring(2)); // 去掉 "+ "
+            const content = line.startsWith('+ ') ? line.substring(2) : line.substring(1);
+            newLines.push(content);
             i++;
             continue;
         }
@@ -509,6 +511,70 @@ export function applyPathFixes(toolUse: any, workspaceInfo: any) {
     }
 }
 
+// ========== 任务列表工具定义（供三个 provider 共用） ==========
+const TASKLIST_TOOL_DEFS = {
+    view_tasklist: {
+        description: '查看当前任务列表，返回所有任务的树形结构和状态统计',
+        parameters: { type: 'object' as const, properties: {}, additionalProperties: false }
+    },
+    update_tasks: {
+        description: '批量更新任务状态。state 可选值: NOT_STARTED, IN_PROGRESS, COMPLETE, CANCELLED',
+        parameters: {
+            type: 'object' as const,
+            properties: {
+                updates: {
+                    type: 'array',
+                    description: '要更新的任务数组',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            uuid: { type: 'string', description: '任务 UUID（前8位即可）' },
+                            state: { type: 'string', enum: ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE', 'CANCELLED'] }
+                        },
+                        required: ['uuid', 'state']
+                    }
+                }
+            },
+            required: ['updates'],
+            additionalProperties: false
+        }
+    },
+    add_tasks: {
+        description: '批量添加新任务到任务列表',
+        parameters: {
+            type: 'object' as const,
+            properties: {
+                tasks: {
+                    type: 'array',
+                    description: '要添加的任务数组',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            name: { type: 'string', description: '任务名称' },
+                            description: { type: 'string', description: '任务描述' },
+                            parent_uuid: { type: 'string', description: '父任务 UUID（可选，用于创建子任务）' }
+                        },
+                        required: ['name']
+                    }
+                }
+            },
+            required: ['tasks'],
+            additionalProperties: false
+        }
+    },
+    reorganize_tasklist: {
+        description: '使用 Markdown 格式重新组织整个任务列表。格式: [ ] UUID:xxx NAME:任务名 DESCRIPTION:描述',
+        parameters: {
+            type: 'object' as const,
+            properties: {
+                tasklist: { type: 'string', description: 'Markdown 格式的完整任务列表' }
+            },
+            required: ['tasklist'],
+            additionalProperties: false
+        }
+    }
+};
+
 // ========== 转换 Augment tool_definitions 到 Anthropic tools 格式 ==========
 export function convertToolDefinitions(toolDefs: any[]): any[] | undefined {
     if (!toolDefs || toolDefs.length === 0)
@@ -548,10 +614,13 @@ export function convertToolDefinitions(toolDefs: any[]): any[] | undefined {
             });
         }
     }
+    // 注入任务列表工具 schema
+    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
+        tools.push({ name, description: def.description, input_schema: def.parameters });
+    }
+    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (Anthropic)`);
     return tools.length > 0 ? tools : undefined;
 }
-
-// ========== 转换 Augment tool_definitions 到 OpenAI tools 格式 ==========
 export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefined {
     if (!toolDefs || toolDefs.length === 0)
         return undefined;
@@ -626,6 +695,11 @@ export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefin
             });
         }
     }
+    // 注入任务列表工具 schema
+    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
+        tools.push({ type: 'function', function: { name, description: def.description, parameters: def.parameters } });
+    }
+    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (OpenAI)`);
     return tools.length > 0 ? tools : undefined;
 }
 
@@ -654,10 +728,13 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
             parameters: parameters || { type: 'object', properties: {} }
         });
     }
+    // 注入任务列表工具 schema
+    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
+        tools.push({ name, description: def.description, parameters: def.parameters });
+    }
+    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (Gemini)`);
     return tools;
 }
-
-// ========== 智能工具转换和拦截：edit-file/save-file/str-replace-editor ==========
 // Augment 插件标记 str-replace-editor 为不支持的工具（unsupportedSidecarTools）
 // 策略：拦截这些工具调用，直接在代理层执行文件编辑，然后返回成功结果
 // ========== str-replace-editor 核心匹配逻辑（基于 Augment 逆向） ==========
@@ -717,6 +794,155 @@ function findMatchInContent(content: string, oldStr: string, startLine?: number,
 export function convertOrInterceptFileEdit(toolName: string, input: any, workspaceInfo: any): { toolName: string; input: any; intercepted?: boolean; result?: any } | null {
     const fs = require('fs');
     const path = require('path');
+
+    // ========== 拦截任务列表工具 ==========
+    if (toolName === 'view_tasklist' || toolName === 'reorganize_tasklist' ||
+        toolName === 'update_tasks' || toolName === 'add_tasks') {
+        const { globalTaskListStore, TaskListManager } = require('./tasklist');
+        const conversationId = (workspaceInfo as any)?.conversationId || 'default';
+        const taskList = globalTaskListStore.getOrCreate(conversationId);
+
+        if (toolName === 'view_tasklist') {
+            log(`[INTERCEPT] view_tasklist: returning current task list`);
+            const formatted = taskList.formatTaskTree();
+            const stats = taskList.getTaskStats();
+            const result = formatted || '# 当前任务列表为空\n\n使用 add_tasks 工具创建新任务。';
+            const statsText = `\n\n📊 任务统计: 总计 ${stats.total} | 未开始 ${stats.notStarted} | 进行中 ${stats.inProgress} | 已完成 ${stats.complete} | 已取消 ${stats.cancelled}`;
+
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: result + statsText + '\n\n' + TaskListManager.getTaskListInstructions()
+            };
+        }
+
+        if (toolName === 'reorganize_tasklist') {
+            log(`[INTERCEPT] reorganize_tasklist: parsing and updating task list`);
+            const markdown = input.tasklist || input.task_list || input.markdown || '';
+
+            if (!markdown) {
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: '缺少任务列表内容' }
+                };
+            }
+
+            try {
+                const parsed = taskList.parseMarkdownTaskList(markdown);
+                if (!parsed) {
+                    return {
+                        toolName,
+                        input,
+                        intercepted: true,
+                        result: { success: false, error: '任务列表解析失败' }
+                    };
+                }
+
+                const stats = taskList.getTaskStats();
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: {
+                        success: true,
+                        message: `✅ 任务列表已更新\n\n📊 统计: 总计 ${stats.total} | 未开始 ${stats.notStarted} | 进行中 ${stats.inProgress} | 已完成 ${stats.complete} | 已取消 ${stats.cancelled}`,
+                        stats
+                    }
+                };
+            } catch (e: any) {
+                log(`[INTERCEPT] reorganize_tasklist error: ${e.message}`);
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: `任务列表解析失败: ${e.message}` }
+                };
+            }
+        }
+
+        if (toolName === 'update_tasks') {
+            log(`[INTERCEPT] update_tasks: updating task states`);
+            const updates = input.updates || input.tasks || [];
+
+            if (!Array.isArray(updates) || updates.length === 0) {
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: '缺少更新内容' }
+                };
+            }
+
+            const results: string[] = [];
+            for (const update of updates) {
+                const uuid = update.uuid || update.id;
+                const newState = update.state || update.status;
+
+                if (!uuid || !newState) {
+                    results.push(`❌ 缺少 UUID 或状态`);
+                    continue;
+                }
+
+                const success = taskList.updateTaskState(uuid, newState);
+                if (success) {
+                    results.push(`✅ 任务 ${uuid.slice(0, 8)} 状态已更新为 ${newState}`);
+                } else {
+                    results.push(`❌ 任务 ${uuid.slice(0, 8)} 未找到`);
+                }
+            }
+
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: {
+                    success: true,
+                    message: results.join('\n')
+                }
+            };
+        }
+
+        if (toolName === 'add_tasks') {
+            log(`[INTERCEPT] add_tasks: adding new tasks`);
+            const tasks = input.tasks || input.new_tasks || [];
+
+            if (!Array.isArray(tasks) || tasks.length === 0) {
+                return {
+                    toolName,
+                    input,
+                    intercepted: true,
+                    result: { success: false, error: '缺少任务内容' }
+                };
+            }
+
+            const results: string[] = [];
+            for (const taskData of tasks) {
+                const parentUuid = taskData.parent_uuid || taskData.parent || null;
+                const name = taskData.name || taskData.title || '未命名任务';
+                const description = taskData.description || taskData.desc || '';
+
+                const newTask = taskList.addTask(parentUuid, name, description);
+                if (newTask) {
+                    results.push(`✅ 已创建任务 ${newTask.uuid.slice(0, 8)}: ${name}`);
+                } else {
+                    results.push(`❌ 创建任务失败: ${name}`);
+                }
+            }
+
+            return {
+                toolName,
+                input,
+                intercepted: true,
+                result: {
+                    success: true,
+                    message: results.join('\n')
+                }
+            };
+        }
+    }
 
     // ========== 拦截 $web_search：原封不动返回 arguments ==========
     // Kimi 内置的联网搜索工具，需要将 arguments 原封不动返回给 Kimi

@@ -18,6 +18,63 @@ import { SessionMemory } from './rag/session-memory';
 // ========== 会话级请求队列 ==========
 const conversationQueues = new Map<string, Promise<void>>();
 
+// ========== Viking/RAG 工作区扫描 ==========
+async function scanAndIndexWorkspace(rootPath: string) {
+    const docs: Array<{ path: string; content: string; hash: string }> = [];
+    const crypto = require('crypto');
+
+    async function scanDir(dir: string) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = path.relative(rootPath, fullPath);
+
+            // 跳过常见的忽略目录
+            if (entry.isDirectory()) {
+                if (['node_modules', '.git', 'dist', 'build', 'out', '.vscode'].includes(entry.name)) continue;
+                await scanDir(fullPath);
+            } else if (entry.isFile()) {
+                // 只索引代码文件
+                const ext = path.extname(entry.name).toLowerCase();
+                if (['.ts', '.js', '.tsx', '.jsx', '.py', '.java', '.go', '.rs', '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift', '.kt', '.scala', '.md', '.json', '.yaml', '.yml', '.toml', '.xml', '.html', '.css', '.scss', '.less', '.vue', '.svelte'].includes(ext)) {
+                    try {
+                        const content = fs.readFileSync(fullPath, 'utf-8');
+                        const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+                        docs.push({ path: relativePath, content, hash });
+                    } catch (e) {
+                        // 跳过无法读取的文件
+                    }
+                }
+            }
+        }
+    }
+
+    await scanDir(rootPath);
+    log(`[VIKING] 📁 发现 ${docs.length} 个代码文件`);
+
+    if (docs.length > 0 && state.vikingStore) {
+        const generated = await state.vikingStore.batchGenerate(docs, (current, total) => {
+            if (current % 50 === 0 || current === total) {
+                log(`[VIKING] 📊 进度: ${current}/${total}`);
+            }
+        });
+        log(`[VIKING] ✅ 生成了 ${generated} 个新的分层上下文`);
+
+        const stats = state.vikingStore.getStats();
+        log(`[VIKING] 📊 统计: ${stats.totalResources} 个资源, L0=${stats.l0TotalTokens} tokens, L1=${stats.l1TotalTokens} tokens`);
+    }
+
+    // 同时索引到 RAG（使用 addBatchToIndex）
+    if (docs.length > 0 && state.ragIndex) {
+        try {
+            const indexed = await state.ragIndex.addBatchToIndex(docs);
+            log(`[RAG] ✅ 已索引 ${indexed} 个文档到 RAG 引擎`);
+        } catch (e: any) {
+            log(`[RAG] ⚠️ 批量索引失败: ${e.message}`);
+        }
+    }
+}
+
 // ========== 路由处理 ==========
 export function handleProxyRequest(req: any, res: any) {
     const urlPath = req.url || '/';
@@ -550,20 +607,108 @@ function handleChatStream(req: any, res: any) {
             const conversationId = augmentReq.conversation_id || '';
             const historyCount = augmentReq.chat_history?.length || 0;
             log(`[CHAT-STREAM] message: "${(augmentReq.message || '').slice(0, 50)}..." history: ${historyCount}`);
+
             // 会话级请求队列 — 防止同一会话并发请求导致工具在 checkingSafety 阶段被取消
             const pending = conversationQueues.get(conversationId);
             if (pending) { log(`[QUEUE] Waiting for pending request on conversation ${conversationId.substring(0, 8)}...`); try { await pending; } catch {} log(`[QUEUE] Previous request completed, proceeding...`); }
             let resolveReq: () => void;
             const curPromise = new Promise<void>(r => { resolveReq = r; });
             conversationQueues.set(conversationId, curPromise);
+
             try {
                 const workspaceInfo = extractWorkspaceInfo(augmentReq);
-                // v2.0.0: Session Memory — 从用户消息中提取偏好
+
+                // ========== Viking/RAG 上下文注入 ==========
                 const userMsg = augmentReq.message || augmentReq.request_message || '';
+                let vikingContext = '';
+                let ragResults: string[] = [];
+
+                // 检测是否是工具执行后的"..."消息
+                const isToolContinuation = userMsg.trim() === '...' && augmentReq.chat_history && augmentReq.chat_history.length > 0;
+
+                // 如果是"..."，从历史中提取原始任务指令
+                if (isToolContinuation) {
+                    // 从对话历史中找到最近的用户指令
+                    let originalTask = '';
+                    for (let i = augmentReq.chat_history.length - 1; i >= 0; i--) {
+                        const msg = augmentReq.chat_history[i].request_message || '';
+                        if (msg && msg.trim() !== '...' && msg.length > 10) {
+                            originalTask = msg;
+                            break;
+                        }
+                    }
+
+                    if (originalTask) {
+                        augmentReq.message = `你正在执行一个多步骤任务。原始任务：${originalTask}
+
+🎯 执行规则：
+1. 这是一个需要多次工具调用才能完成的任务
+2. 你必须持续调用工具,直到任务100%完成
+3. 不要在中途停下来,不要问用户"接下来做什么"
+4. 不要只执行一个步骤就停止,要完成整个任务
+5. 忽略小的语法错误(如双分号、引号等),专注于功能实现
+6. 如果任务涉及多个文件,依次修改所有文件
+7. 每次工具调用后,立即继续下一步,不要等待
+
+⚠️ 重要：不要停止,继续执行任务直到完全完成!`;
+                        log(`[CHAT-STREAM] 检测到工具延续消息，注入强化多步骤任务指令`);
+                    } else {
+                        augmentReq.message = `继续执行任务。这是一个多步骤任务,你必须持续调用工具直到完全完成。不要停止,不要问用户,立即继续下一步。`;
+                        log(`[CHAT-STREAM] 检测到工具延续消息，已转换为明确指令`);
+                    }
+                }
+
+                // 1. RAG 检索相关代码（跳过"..."消息的检索）
+                if (userMsg && !isToolContinuation && state.ragIndex) {
+                    try {
+                        const results = await state.ragIndex.search(userMsg, 5);
+                        if (results && results.length > 0) {
+                     ragResults = results.map((r: any) => `[${r.path}]\n${r.content.slice(0, 1000)}`);
+                            log(`[RAG] 🔍 检索到 ${results.length} 个相关代码片段`);
+                        }
+                    } catch (e: any) {
+                        log(`[RAG] ⚠️ 检索失败: ${e.message}`);
+                    }
+                }
+
+                // 2. Viking L0 批量注入（所有文件的摘要）
+                if (state.vikingStore) {
+                    try {
+                        const allPaths = state.vikingStore.getAllPaths();
+                        if (allPaths.length > 0) {
+                            // 只注入前 200 个文件的 L0 摘要（约 5k tokens）
+                            const topPaths = allPaths.slice(0, 200);
+                            vikingContext = state.vikingStore.getL0Batch(topPaths);
+                            log(`[VIKING] 📋 注入 ${topPaths.length} 个文件的 L0 摘要`);
+                        }
+                    } catch (e: any) {
+                        log(`[VIKING] ⚠️ L0 注入失败: ${e.message}`);
+                    }
+                }
+
+                // 3. 将 Viking L0 注入到 system prompt
+                if (vikingContext) {
+                    const vikingPrompt = `\n\n# Codebase Structure (Viking L0)\n${vikingContext}`;
+                    if (augmentReq.system_prompt) {
+                        augmentReq.system_prompt += vikingPrompt;
+                    } else {
+                        augmentReq.system_prompt = vikingPrompt;
+                    }
+                }
+
+                // 4. 将 RAG 结果注入到用户消息
+                if (ragResults.length > 0) {
+                    const ragPrompt = `\n\n<relevant_code>\n${ragResults.join('\n---\n')}\n</relevant_code>`;
+                    augmentReq.message = (augmentReq.message || '') + ragPrompt;
+                }
+
+                // v2.0.0: Session Memory — 从用户消息中提取偏好
                 if (userMsg && state.sessionMemory) {
                     state.sessionMemory.extractFromUserMessage(userMsg, conversationId).catch(() => {});
                 }
+
                 if (!state.currentConfig.apiKey) { sendAugmentError(res, `No API key for ${state.currentConfig.provider}`); return; }
+
                 // 转发到目标 provider
                 if (isAnthropicFormat(state.currentConfig.provider)) await forwardToAnthropicStream(augmentReq, res);
                 else if (isGoogleFormat(state.currentConfig.provider)) await forwardToGoogleStream(augmentReq, res);
@@ -612,6 +757,50 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
             log(`端口: ${state.currentConfig.port}`);
             log(`Base URL: ${state.currentConfig.baseUrl}`);
             log(`Model: ${state.currentConfig.model}`);
+
+            // 初始化 Viking Context Store
+            try {
+                const cacheDir = path.join(extensionContext.globalStorageUri.fsPath, 'viking-cache');
+                if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+                state.vikingStore = new VikingContextStore(cacheDir);
+                await state.vikingStore.init();
+                log(`[VIKING] ✅ Viking Context Store 已初始化`);
+
+                // 扫描工作区文件并生成分层上下文
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders && workspaceFolders.length > 0) {
+                    const rootPath = workspaceFolders[0].uri.fsPath;
+                    log(`[VIKING] 🔍 扫描工作区: ${rootPath}`);
+
+                    // 初始化 RAG 引擎（需要 workspaceRoot）
+                    try {
+                        const ragCacheDir = path.join(extensionContext.globalStorageUri.fsPath, 'rag-cache');
+                        state.ragIndex = new RAGContextIndex({
+                            workspaceRoot: rootPath,
+                            cacheDir: ragCacheDir
+                        });
+                        await state.ragIndex.initStorage();
+                        log(`[RAG] ✅ RAG 检索引擎已初始化`);
+                    } catch (e: any) {
+                        log(`[RAG] ⚠️ 初始化失败: ${e.message}`);
+                    }
+
+                    await scanAndIndexWorkspace(rootPath);
+                }
+            } catch (e: any) {
+                log(`[VIKING] ⚠️ 初始化失败: ${e.message}`);
+            }
+
+            // 初始化 Session Memory
+            try {
+                const memoryDir = path.join(extensionContext.globalStorageUri.fsPath, 'session-memory');
+                if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
+                state.sessionMemory = new SessionMemory(memoryDir);
+                await state.sessionMemory.init();
+                log(`[MEMORY] ✅ Session Memory 已初始化`);
+            } catch (e: any) {
+                log(`[MEMORY] ⚠️ 初始化失败: ${e.message}`);
+            }
             if (state.currentConfig.provider === 'minimax') { log(`Prompt 缓存: ${state.currentConfig.enableCache ? '启用' : '禁用'}`); log(`Interleaved Thinking: ${state.currentConfig.enableInterleavedThinking ? '启用' : '禁用'}`); }
             if (state.currentConfig.provider === 'deepseek') { log(`思考模式: ${state.currentConfig.enableThinking ? '启用' : '禁用'}`); log(`上下文缓存: 自动启用 (前缀匹配)`); }
             // 零注入登录绕过：自动配置 Augment 扩展使用代理

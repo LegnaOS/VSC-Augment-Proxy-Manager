@@ -5,10 +5,13 @@ import { state, log } from './globals';
 import { getOMCSystemPrompt, processOMCMagicKeywords } from './omc';
 
 // ===== 从请求中提取工作区信息 =====
-export function extractWorkspaceInfo(req: any): { workspacePath?: string; repositoryRoot?: string; currentFile?: string; cwd?: string } {
-    const result: { workspacePath?: string; repositoryRoot?: string; currentFile?: string; cwd?: string } = {};
+export function extractWorkspaceInfo(req: any): { workspacePath?: string; repositoryRoot?: string; currentFile?: string; cwd?: string; conversationId?: string } {
+    const result: { workspacePath?: string; repositoryRoot?: string; currentFile?: string; cwd?: string; conversationId?: string } = {};
     if (req.path) {
         result.currentFile = req.path;
+    }
+    if (req.conversation_id) {
+        result.conversationId = req.conversation_id;
     }
     if (req.nodes) {
         for (const node of req.nodes) {
@@ -35,6 +38,12 @@ export function extractWorkspaceInfo(req: any): { workspacePath?: string; reposi
 // ===== 构建系统提示 =====
 export function buildSystemPrompt(req: any) {
     const parts: string[] = [];
+
+    // 合并 proxy.ts 注入的 system_prompt（如 Viking L0 上下文）
+    if (req.system_prompt) {
+        parts.push(req.system_prompt);
+    }
+
     const workspaceInfo = extractWorkspaceInfo(req);
     if (workspaceInfo.workspacePath || workspaceInfo.cwd || workspaceInfo.repositoryRoot) {
         const wsInfo: string[] = [];
@@ -138,6 +147,61 @@ Example bad behavior (DO NOT DO THIS):
             parts.push(omcPrompt);
             log(`[OMC] System prompt injected (mode: ${state.currentConfig.omcMode}, continuation: ${state.currentConfig.omcContinuationEnforcement})`);
         }
+    }
+
+    // 任务列表系统提示注入
+    const { globalTaskListStore, TaskListManager } = require('./tasklist');
+    const conversationId = req.conversation_id || 'default';
+    const taskList = globalTaskListStore.getOrCreate(conversationId);
+    const currentTaskTree = taskList.formatTaskTree();
+
+    if (currentTaskTree) {
+        // 如果有任务列表，注入当前任务列表和指令
+        const stats = taskList.getTaskStats();
+        const nextTask = taskList.getNextTask();
+
+        parts.push(`# 当前任务列表
+
+${currentTaskTree}
+
+📊 任务统计: 总计 ${stats.total} | 未开始 ${stats.notStarted} | 进行中 ${stats.inProgress} | 已完成 ${stats.complete} | 已取消 ${stats.cancelled}
+
+${nextTask ? `🎯 下一个待执行任务: ${nextTask.name} (UUID: ${nextTask.uuid.slice(0, 8)})` : '✅ 所有任务已完成'}
+
+${TaskListManager.getTaskListInstructions()}
+
+## 任务列表工具
+- **view_tasklist**: 查看当前任务列表
+- **reorganize_tasklist**: 重新组织任务列表 (参数: tasklist - Markdown 格式的任务列表)
+- **update_tasks**: 更新任务状态 (参数: updates - 包含 uuid 和 state 的数组)
+- **add_tasks**: 添加新任务 (参数: tasks - 包含 name, description, parent_uuid 的数组)
+
+## 工作流程
+1. 开始执行任务前，使用 update_tasks 将任务状态改为 IN_PROGRESS ([/])
+2. 完成任务后，使用 update_tasks 将任务状态改为 COMPLETE ([x])
+3. 如果发现需要新的子任务，使用 add_tasks 添加
+4. 定期使用 view_tasklist 查看任务进度
+5. 按顺序完成任务，不要跳过`);
+    } else {
+        // 如果没有任务列表，只注入工具说明
+        parts.push(`# 任务列表功能
+
+你可以使用任务列表工具来组织和跟踪复杂的多步骤任务：
+
+## 可用工具
+- **view_tasklist**: 查看当前任务列表
+- **reorganize_tasklist**: 创建或重新组织任务列表
+- **update_tasks**: 更新任务状态
+- **add_tasks**: 添加新任务
+
+${TaskListManager.getTaskListInstructions()}
+
+## 何时使用任务列表
+- 用户要求执行复杂的多步骤任务时
+- 需要跟踪多个相关任务的进度时
+- 任务之间有依赖关系需要管理时
+
+使用 reorganize_tasklist 创建任务列表，然后使用 update_tasks 跟踪进度。`);
     }
 
     // v2.0.0: Viking Session Memory 注入 — 从历史对话中学习到的用户偏好和 Agent 经验

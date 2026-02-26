@@ -263,8 +263,10 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
             const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model, onTextDelta, responseFormat);
             accumulatedText += result.text;
 
-            if (result.toolCalls.length === 0 || result.finishReason === 'stop') {
-                log(`[LOOP] No tool calls or stop, ending loop`);
+            // 只检查 toolCalls 是否为空，不检查 finishReason
+            // 某些兼容 API 返回 tool_calls 时 finish_reason 可能仍为 'stop'
+            if (result.toolCalls.length === 0) {
+                log(`[LOOP] No tool calls, ending loop`);
                 res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
                 res.end();
                 return;

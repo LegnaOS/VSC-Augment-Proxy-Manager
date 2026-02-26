@@ -14,7 +14,8 @@ interface AnthropicResult { text: string; toolCalls: AnthropicToolCall[]; stopRe
 // ========== 执行单次 Anthropic API 请求 ==========
 function executeAnthropicRequest(
     messages: any[], systemContent: any, tools: any[],
-    onTextDelta: (delta: string) => void
+    onTextDelta: (delta: string) => void,
+    additionalParams?: any
 ): Promise<AnthropicResult> {
     return new Promise((resolve, reject) => {
         const requestBody: any = {
@@ -22,7 +23,55 @@ function executeAnthropicRequest(
             system: systemContent, messages, stream: true
         };
         if (tools && tools.length > 0) { requestBody.tools = tools; }
+
+        // ========== 支持所有 Claude API 高级参数 ==========
+        if (additionalParams) {
+            // Extended/Adaptive Thinking
+            if (additionalParams.thinking) {
+                requestBody.thinking = additionalParams.thinking;
+            }
+
+            // Output Config (effort, fast_mode, format, schema, strict)
+            if (additionalParams.output_config) {
+                requestBody.output_config = additionalParams.output_config;
+            }
+
+            // Tool Choice
+            if (additionalParams.tool_choice) {
+                requestBody.tool_choice = additionalParams.tool_choice;
+            }
+
+            // Metadata
+            if (additionalParams.metadata) {
+                requestBody.metadata = additionalParams.metadata;
+            }
+
+            // Stop Sequences
+            if (additionalParams.stop_sequences) {
+                requestBody.stop_sequences = additionalParams.stop_sequences;
+            }
+
+            // Temperature
+            if (additionalParams.temperature !== undefined) {
+                requestBody.temperature = additionalParams.temperature;
+            }
+
+            // Top P
+            if (additionalParams.top_p !== undefined) {
+                requestBody.top_p = additionalParams.top_p;
+            }
+
+            // Top K
+            if (additionalParams.top_k !== undefined) {
+                requestBody.top_k = additionalParams.top_k;
+            }
+        }
         const apiBody = JSON.stringify(requestBody);
+
+        // 记录请求体大小
+        const bodySizeKB = (Buffer.byteLength(apiBody) / 1024).toFixed(2);
+        log(`[API] Request body size: ${bodySizeKB} KB, messages: ${messages.length}`);
+
         const url = new URL(state.currentConfig.baseUrl);
         const headers: any = {
             'Content-Type': 'application/json',
@@ -49,15 +98,21 @@ function executeAnthropicRequest(
         let buffer = '';
         let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
         let isInThinkingBlock = false;
+        let currentThinkingBlock: { thinking: string; signature?: string } | null = null;
+        let currentRedactedThinking: { data: string } | null = null;
         const shouldShowThinking = (state.currentConfig.provider === 'minimax' && state.currentConfig.enableInterleavedThinking) ||
-            (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking);
+            (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking) ||
+            (additionalParams?.thinking); // 如果启用了 thinking,也显示
 
         const httpModule = isHttps ? https : http;
         const apiReq = httpModule.request(options, (apiRes) => {
             if (apiRes.statusCode !== 200) {
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);
-                apiRes.on('end', () => reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 200)}`)));
+                apiRes.on('end', () => {
+                    log(`[API] Error response: ${apiRes.statusCode} ${errorBody.slice(0, 500)}`);
+                    reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 200)}`));
+                });
                 return;
             }
             apiRes.on('data', (chunk: any) => {
@@ -85,32 +140,66 @@ function executeAnthropicRequest(
                         // 处理 message_stop 事件
                         if (event.type === 'message_stop') continue;
 
-                        if (event.type === 'content_block_start' && event.content_block?.type === 'thinking' && shouldShowThinking) {
-                            isInThinkingBlock = true;
-                            onTextDelta('<think>\n');
+                        // 处理 content_block_start 事件
+                        if (event.type === 'content_block_start') {
+                            // Thinking block
+                            if (event.content_block?.type === 'thinking' && shouldShowThinking) {
+                                isInThinkingBlock = true;
+                                currentThinkingBlock = { thinking: '' };
+                                onTextDelta('<think>\n');
+                            }
+                            // Redacted thinking block
+                            if (event.content_block?.type === 'redacted_thinking') {
+                                currentRedactedThinking = { data: event.content_block.data || '' };
+                                if (shouldShowThinking) {
+                                    onTextDelta('<redacted_thinking>\n[Encrypted thinking content]\n</redacted_thinking>\n\n');
+                                }
+                            }
+                            // Tool use
+                            if (event.content_block?.type === 'tool_use') {
+                                currentToolUse = { id: event.content_block.id, name: event.content_block.name, inputJson: '' };
+                            }
                         }
-                        if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && isInThinkingBlock) {
-                            onTextDelta(event.delta.thinking || '');
+
+                        // 处理 content_block_delta 事件
+                        if (event.type === 'content_block_delta') {
+                            // Thinking delta
+                            if (event.delta?.type === 'thinking_delta' && isInThinkingBlock && currentThinkingBlock) {
+                                const thinkingText = event.delta.thinking || '';
+                                currentThinkingBlock.thinking += thinkingText;
+                                onTextDelta(thinkingText);
+                            }
+                            // Signature delta (thinking block signature)
+                            if (event.delta?.type === 'signature_delta' && currentThinkingBlock) {
+                                currentThinkingBlock.signature = (currentThinkingBlock.signature || '') + (event.delta.signature || '');
+                            }
+                            // Text delta
+                            if (event.delta?.type === 'text_delta') {
+                                result.text += event.delta.text;
+                                onTextDelta(event.delta.text);
+                            }
+                            // Tool input delta
+                            if (event.delta?.type === 'input_json_delta' && currentToolUse) {
+                                currentToolUse.inputJson += event.delta.partial_json;
+                            }
                         }
-                        if (event.type === 'content_block_stop' && isInThinkingBlock) {
-                            onTextDelta('\n</think>\n\n');
-                            isInThinkingBlock = false;
-                        }
-                        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                            result.text += event.delta.text;
-                            onTextDelta(event.delta.text);
-                        }
-                        if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
-                            currentToolUse = { id: event.content_block.id, name: event.content_block.name, inputJson: '' };
-                        }
-                        if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta' && currentToolUse) {
-                            currentToolUse.inputJson += event.delta.partial_json;
-                        }
-                        if (event.type === 'content_block_stop' && currentToolUse) {
-                            try {
-                                result.toolCalls.push({ id: currentToolUse.id, name: currentToolUse.name, input: JSON.parse(currentToolUse.inputJson || '{}') });
-                            } catch (e) { log(`[TOOL] Parse error: ${e}`); }
-                            currentToolUse = null;
+
+                        // 处理 content_block_stop 事件
+                        if (event.type === 'content_block_stop') {
+                            if (isInThinkingBlock) {
+                                onTextDelta('\n</think>\n\n');
+                                isInThinkingBlock = false;
+                                currentThinkingBlock = null;
+                            }
+                            if (currentRedactedThinking) {
+                                currentRedactedThinking = null;
+                            }
+                            if (currentToolUse) {
+                                try {
+                                    result.toolCalls.push({ id: currentToolUse.id, name: currentToolUse.name, input: JSON.parse(currentToolUse.inputJson || '{}') });
+                                } catch (e) { log(`[TOOL] Parse error: ${e}`); }
+                                currentToolUse = null;
+                            }
                         }
                         if (event.type === 'message_delta' && event.delta?.stop_reason) {
                             result.stopReason = event.delta.stop_reason;
@@ -124,10 +213,24 @@ function executeAnthropicRequest(
                 log(`[API] Complete: text=${result.text.length}, tools=${result.toolCalls.length}, stop=${result.stopReason}`);
                 resolve(result);
             });
-            apiRes.on('error', (err: any) => reject(err));
+            apiRes.on('error', (err: any) => {
+                log(`[API] Response stream error: ${err.message}`);
+                reject(err);
+            });
         });
-        apiReq.on('error', (err: any) => reject(err));
-        apiReq.setTimeout(90000, () => { apiReq.destroy(); reject(new Error('Request timeout after 90s')); });
+        apiReq.on('error', (err: any) => {
+            log(`[API] Request error: ${err.message}, code: ${err.code}`);
+            reject(err);
+        });
+        apiReq.on('abort', () => {
+            log(`[API] Request aborted by client or server`);
+            reject(new Error('Request aborted'));
+        });
+        apiReq.setTimeout(90000, () => {
+            log(`[API] Request timeout after 90s`);
+            apiReq.destroy();
+            reject(new Error('Request timeout after 90s'));
+        });
         apiReq.write(apiBody);
         apiReq.end();
     });
@@ -141,6 +244,51 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     const workspaceInfo = extractWorkspaceInfo(augmentReq);
     const rawTools = augmentReq.tool_definitions || [];
     const tools = convertToolDefinitions(rawTools);
+
+    // ========== 提取所有 Claude API 高级参数 ==========
+    const additionalParams: any = {};
+
+    // Extended/Adaptive Thinking
+    if (augmentReq.thinking) {
+        additionalParams.thinking = augmentReq.thinking;
+    }
+
+    // Output Config (effort, fast_mode, format, schema, strict)
+    if (augmentReq.output_config) {
+        additionalParams.output_config = augmentReq.output_config;
+    }
+
+    // Tool Choice
+    if (augmentReq.tool_choice) {
+        additionalParams.tool_choice = augmentReq.tool_choice;
+    }
+
+    // Metadata
+    if (augmentReq.metadata) {
+        additionalParams.metadata = augmentReq.metadata;
+    }
+
+    // Stop Sequences
+    if (augmentReq.stop_sequences) {
+        additionalParams.stop_sequences = augmentReq.stop_sequences;
+    }
+
+    // Temperature
+    if (augmentReq.temperature !== undefined) {
+        additionalParams.temperature = augmentReq.temperature;
+    }
+
+    // Top P
+    if (augmentReq.top_p !== undefined) {
+        additionalParams.top_p = augmentReq.top_p;
+    }
+
+    // Top K
+    if (augmentReq.top_k !== undefined) {
+        additionalParams.top_k = augmentReq.top_k;
+    }
+
+    log(`[API] Additional params: ${JSON.stringify(Object.keys(additionalParams))}`);
 
     let systemContent: any = undefined;
     if (system) {
@@ -192,9 +340,13 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     try {
         for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
             log(`[LOOP] Anthropic iteration ${iteration + 1}/${MAX_ITERATIONS}`);
-            const result = await executeAnthropicRequest(currentMessages, systemContent, cachedTools, onTextDelta);
+            const result = await executeAnthropicRequest(currentMessages, systemContent, cachedTools, onTextDelta, additionalParams);
 
-            if (result.toolCalls.length === 0 || result.stopReason === 'end_turn') {
+            // 检查是否有工具调用 —— 只看 toolCalls，不看 stopReason
+            // Claude API 返回 tool_use 时 stopReason 可能是 'end_turn' 也可能是 'tool_use'
+            // 之前用 || stopReason === 'end_turn' 会导致有工具调用时被错误判定为结束
+            if (result.toolCalls.length === 0) {
+                // 没有工具调用，正常结束
                 res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 1 }) + '\n');
                 clearInterval(heartbeat);
                 res.end();
