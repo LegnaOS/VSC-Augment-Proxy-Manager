@@ -1392,6 +1392,7 @@ export function processToolCallForAugment(
                     type: 1, // TOOL_RESULT
                     tool_result_node: {
                         tool_use_id: tc.id,
+                        tool_name: tc.name,
                         content: JSON.stringify(converted.result)
                     }
                 };

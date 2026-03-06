@@ -5,9 +5,113 @@ import * as http from 'http';
 import { URL } from 'url';
 import { state, log } from '../globals';
 import { OpenAIRequestResult } from '../types';
-import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError } from '../messages';
+import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError, splitReasoningContentFromText } from '../messages';
 import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
+
+function isKimiProvider(): boolean {
+    return state.currentConfig.provider === 'kimi';
+}
+
+function sanitizeKimiToolName(name?: string): string {
+    const sanitized = (name || 'tool').replace(/[^A-Za-z0-9_-]/g, '_');
+    return sanitized || 'tool';
+}
+
+function parseKimiToolCallId(id?: string): number | null {
+    if (!id) return null;
+    const match = id.match(/^functions\.[A-Za-z0-9_-]+:([0-9]+)$/);
+    if (!match) return null;
+    return Number.parseInt(match[1], 10);
+}
+
+function normalizeKimiMessages(messages: any[]): any[] {
+    if (!isKimiProvider()) {
+        return messages;
+    }
+
+    let nextToolIndex = 0;
+    let normalizedCount = 0;
+    const pendingToolCalls: Array<{ originalId?: string; normalizedId: string; name: string }> = [];
+
+    const normalizedMessages = messages.map((message: any) => {
+        if (!message || typeof message !== 'object') {
+            return message;
+        }
+
+        const normalizedMessage = { ...message };
+
+        if (normalizedMessage.role === 'assistant' && Array.isArray(normalizedMessage.tool_calls)) {
+            normalizedMessage.tool_calls = normalizedMessage.tool_calls.map((toolCall: any) => {
+                const toolName = toolCall?.function?.name || 'tool';
+                const parsedIndex = parseKimiToolCallId(toolCall?.id);
+                const normalizedId = parsedIndex !== null
+                    ? toolCall.id
+                    : `functions.${sanitizeKimiToolName(toolName)}:${nextToolIndex}`;
+
+                if (parsedIndex !== null) {
+                    nextToolIndex = Math.max(nextToolIndex, parsedIndex + 1);
+                } else {
+                    nextToolIndex += 1;
+                }
+
+                if (toolCall?.id !== normalizedId) {
+                    normalizedCount += 1;
+                }
+
+                pendingToolCalls.push({
+                    originalId: toolCall?.id,
+                    normalizedId,
+                    name: toolName
+                });
+
+                return {
+                    ...toolCall,
+                    id: normalizedId,
+                    function: {
+                        ...toolCall.function,
+                        name: toolName,
+                        arguments: typeof toolCall?.function?.arguments === 'string'
+                            ? toolCall.function.arguments
+                            : JSON.stringify(toolCall?.function?.arguments || {})
+                    }
+                };
+            });
+            return normalizedMessage;
+        }
+
+        if (normalizedMessage.role === 'tool') {
+            const matchedIndex = pendingToolCalls.findIndex((toolCall) =>
+                toolCall.originalId === normalizedMessage.tool_call_id ||
+                toolCall.normalizedId === normalizedMessage.tool_call_id ||
+                (!!normalizedMessage.name && toolCall.name === normalizedMessage.name)
+            );
+            const matched = matchedIndex >= 0 ? pendingToolCalls.splice(matchedIndex, 1)[0] : null;
+
+            if (matched) {
+                if (normalizedMessage.tool_call_id !== matched.normalizedId) {
+                    normalizedCount += 1;
+                }
+                normalizedMessage.tool_call_id = matched.normalizedId;
+                normalizedMessage.name = normalizedMessage.name || matched.name;
+            } else {
+                normalizedMessage.name = normalizedMessage.name || 'tool';
+            }
+
+            if (normalizedMessage.content === undefined || normalizedMessage.content === null) {
+                normalizedMessage.content = '';
+            }
+        }
+
+        return normalizedMessage;
+    });
+
+    if (normalizedCount > 0) {
+        log(`[KIMI] Normalized ${normalizedCount} tool_call id/message field(s) before request`);
+    }
+
+    return normalizedMessages;
+}
 
 // ========== 执行单次 OpenAI API 请求（真流式） ==========
 // onTextDelta: 文本增量到达时立即回调，实现真正的流式输出
@@ -257,10 +361,11 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
         while (iteration < MAX_ITERATIONS) {
             iteration++;
             log(`[LOOP] Iteration ${iteration}/${MAX_ITERATIONS}`);
+            const requestMessages = normalizeKimiMessages(currentMessages);
 
             // 第一轮迭代使用流式回调，后续 RAG 循环也流式输出
             // ✅ 新增：传递 responseFormat 参数
-            const result = await executeOpenAIRequest(currentMessages, tools, apiEndpoint, apiKey, model, onTextDelta, responseFormat);
+            const result = await executeOpenAIRequest(requestMessages, tools, apiEndpoint, apiKey, model, onTextDelta, responseFormat);
             accumulatedText += result.text;
 
             // 只检查 toolCalls 是否为空，不检查 finishReason
@@ -323,17 +428,23 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                         arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {})
                     }
                 }));
-                currentMessages.push({
+                const assistantReplay = splitReasoningContentFromText(result.text);
+                const assistantReplayMessage: any = {
                     role: 'assistant',
-                    content: result.text || null,
+                    content: assistantReplay.content || null,
                     tool_calls: assistantToolCallsMsg
-                });
+                };
+                if (assistantReplay.reasoningContent) {
+                    assistantReplayMessage.reasoning_content = assistantReplay.reasoningContent;
+                }
+                currentMessages.push(assistantReplayMessage);
 
                 // 2. 添加拦截工具的执行结果作为 tool message
                 for (const { tc, toolNode } of interceptedTools) {
                     currentMessages.push({
                         role: 'tool',
                         tool_call_id: tc.id,
+                        name: tc.name,
                         content: toolNode.tool_result_node.content
                     });
                     // 流式显示执行状态和 diff 给用户
@@ -352,7 +463,7 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 // 3. 同时处理 codebase_search（如果有）
                 for (const cs of codebaseSearchCalls) {
                     const searchResult = await executeRAGSearch(cs.query);
-                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, content: searchResult });
+                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, name: 'codebase_search', content: searchResult });
                     res.write(JSON.stringify({
                         text: `\n📚 **代码库搜索** ("${cs.query.substring(0, 30)}...")\n`,
                         nodes: [], stop_reason: 0
@@ -369,11 +480,20 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                     id: cs.id, type: 'function',
                     function: { name: 'codebase_search', arguments: JSON.stringify({ query: cs.query }) }
                 }));
-                currentMessages.push({ role: 'assistant', content: result.text || null, tool_calls: toolCallsForMsg });
+                const assistantReplay = splitReasoningContentFromText(result.text);
+                const assistantReplayMessage: any = {
+                    role: 'assistant',
+                    content: assistantReplay.content || null,
+                    tool_calls: toolCallsForMsg
+                };
+                if (assistantReplay.reasoningContent) {
+                    assistantReplayMessage.reasoning_content = assistantReplay.reasoningContent;
+                }
+                currentMessages.push(assistantReplayMessage);
 
                 for (const cs of codebaseSearchCalls) {
                     const searchResult = await executeRAGSearch(cs.query);
-                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, content: searchResult });
+                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, name: 'codebase_search', content: searchResult });
                     res.write(JSON.stringify({
                         text: `\n\n🔍 **代码库搜索** (查询: "${cs.query}")\n${searchResult.split('\n').slice(0, 5).join('\n')}...\n\n`,
                         nodes: [], stop_reason: 0

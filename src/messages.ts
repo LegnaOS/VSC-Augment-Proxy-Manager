@@ -300,8 +300,8 @@ function extractToolResults(nodes: any[] = []): NormalizedToolResult[] {
         if (node.type !== 1 || !node.tool_result_node) continue;
         const toolResult = node.tool_result_node;
         toolResults.push({
-            id: toolResult.tool_use_id || toolResult.id,
-            name: toolResult.tool_name || 'unknown',
+            id: toolResult.tool_call_id || toolResult.tool_use_id || toolResult.id || '',
+            name: toolResult.tool_name || toolResult.name || 'unknown',
             content: toolResult.content || ''
         });
     }
@@ -337,9 +337,8 @@ function pushNormalizedTurn(turns: NormalizedTurn[], turn: NormalizedTurn | null
     });
 }
 
-export function normalizeAugmentTimeline(req: any): NormalizedTurn[] {
+function buildNormalizedTurns(chatHistory: any[], req: any): NormalizedTurn[] {
     const turns: NormalizedTurn[] = [];
-    const chatHistory = getEffectiveChatHistory(req);
 
     for (const exchange of chatHistory) {
         pushNormalizedTurn(turns, {
@@ -372,197 +371,351 @@ export function normalizeAugmentTimeline(req: any): NormalizedTurn[] {
     return turns;
 }
 
+function mergeNormalizedTurns(turns: NormalizedTurn[]): NormalizedTurn[] {
+    const merged: NormalizedTurn[] = [];
+
+    for (const turn of turns) {
+        const previous = merged[merged.length - 1];
+        if (!previous || previous.role !== turn.role) {
+            merged.push({
+                ...turn,
+                toolUses: turn.toolUses ? [...turn.toolUses] : undefined,
+                toolResults: turn.toolResults ? [...turn.toolResults] : undefined,
+                images: turn.images ? [...turn.images] : undefined
+            });
+            continue;
+        }
+
+        previous.text = [previous.text, turn.text].filter(Boolean).join('\n\n') || undefined;
+        if (turn.toolUses?.length) {
+            previous.toolUses = [...(previous.toolUses || []), ...turn.toolUses];
+        }
+        if (turn.toolResults?.length) {
+            previous.toolResults = [...(previous.toolResults || []), ...turn.toolResults];
+        }
+        if (turn.images?.length) {
+            previous.images = [...(previous.images || []), ...turn.images];
+        }
+    }
+
+    return merged;
+}
+
+function stabilizeToolTurnAdjacency(turns: NormalizedTurn[]): NormalizedTurn[] {
+    const stabilized: NormalizedTurn[] = [];
+    let pendingToolUses = 0;
+
+    for (let i = 0; i < turns.length; i += 1) {
+        const turn = turns[i];
+        const toolResultCount = turn.role === 'user' ? (turn.toolResults?.length || 0) : 0;
+        const nextTurn = turns[i + 1];
+        const nextToolUseCount = nextTurn?.role === 'assistant' ? (nextTurn.toolUses?.length || 0) : 0;
+
+        if (
+            turn.role === 'user' &&
+            toolResultCount > 0 &&
+            pendingToolUses === 0 &&
+            nextTurn?.role === 'assistant' &&
+            nextToolUseCount > 0
+        ) {
+            stabilized.push(nextTurn, turn);
+            pendingToolUses = Math.max(0, nextToolUseCount - toolResultCount);
+            i += 1;
+            continue;
+        }
+
+        stabilized.push(turn);
+
+        if (turn.role === 'assistant' && (turn.toolUses?.length || 0) > 0) {
+            pendingToolUses += turn.toolUses!.length;
+            continue;
+        }
+
+        if (turn.role === 'user' && toolResultCount > 0 && pendingToolUses > 0) {
+            pendingToolUses = Math.max(0, pendingToolUses - toolResultCount);
+        }
+    }
+
+    return mergeNormalizedTurns(stabilized);
+}
+
+function scoreNormalizedTurns(turns: NormalizedTurn[]): number {
+    let score = 0;
+    let pendingToolUses = 0;
+
+    for (const turn of turns) {
+        if (turn.role === 'assistant') {
+            if (turn.toolUses && turn.toolUses.length > 0) {
+                if (pendingToolUses > 0) {
+                    score -= pendingToolUses * 3;
+                }
+                pendingToolUses = turn.toolUses.length;
+                score += turn.toolUses.length;
+            }
+            continue;
+        }
+
+        const toolResultCount = turn.toolResults?.length || 0;
+        if (toolResultCount === 0) {
+            continue;
+        }
+
+        if (pendingToolUses > 0) {
+            const matchedCount = Math.min(toolResultCount, pendingToolUses);
+            score += matchedCount * 4;
+            score -= Math.abs(toolResultCount - pendingToolUses) * 2;
+            pendingToolUses = Math.max(0, pendingToolUses - toolResultCount);
+        } else {
+            score -= toolResultCount * 4;
+        }
+    }
+
+    if (pendingToolUses > 0) {
+        score -= pendingToolUses * 3;
+    }
+
+    return score;
+}
+
+export function normalizeAugmentTimeline(req: any): NormalizedTurn[] {
+    const chatHistory = getEffectiveChatHistory(req);
+    const forwardTurns = stabilizeToolTurnAdjacency(buildNormalizedTurns(chatHistory, req));
+
+    if (chatHistory.length <= 1) {
+        return forwardTurns;
+    }
+
+    const reversedTurns = stabilizeToolTurnAdjacency(buildNormalizedTurns([...chatHistory].reverse(), req));
+    const forwardScore = scoreNormalizedTurns(forwardTurns);
+    const reversedScore = scoreNormalizedTurns(reversedTurns);
+
+    if (reversedScore > forwardScore) {
+        log(`[DEBUG] normalizeAugmentTimeline selected reversed chat_history order (forward=${forwardScore}, reversed=${reversedScore})`);
+        return reversedTurns;
+    }
+
+    if (reversedScore < forwardScore) {
+        log(`[DEBUG] normalizeAugmentTimeline kept forward chat_history order (forward=${forwardScore}, reversed=${reversedScore})`);
+    }
+
+    return forwardTurns;
+}
+
+function sanitizeKimiAnthropicToolName(name?: string): string {
+    const sanitized = (name || 'tool')
+        .replace(/[^A-Za-z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+    return sanitized || 'tool';
+}
+
+function normalizeKimiAnthropicMessages(messages: any[]): any[] {
+    if (state.currentConfig.provider !== 'kimi-anthropic') {
+        return messages;
+    }
+
+    const counters = new Map<string, number>();
+    const pendingToolUses: Array<{ originalId?: string; normalizedId: string }> = [];
+    let rewrittenToolUses = 0;
+    let rewrittenToolResults = 0;
+
+    const normalizedMessages = messages.map((message: any) => {
+        if (!message || typeof message !== 'object' || !Array.isArray(message.content)) {
+            return message;
+        }
+
+        if (message.role === 'assistant') {
+            const normalizedContent = message.content.map((part: any) => {
+                if (part?.type !== 'tool_use') {
+                    return part;
+                }
+
+                const toolName = sanitizeKimiAnthropicToolName(part.name);
+                const currentIndex = counters.get(toolName) || 0;
+                counters.set(toolName, currentIndex + 1);
+
+                const normalizedId = `${toolName}:${currentIndex}`;
+                pendingToolUses.push({ originalId: part.id, normalizedId });
+
+                if (part.id !== normalizedId || part.name !== toolName) {
+                    rewrittenToolUses += 1;
+                }
+
+                return {
+                    ...part,
+                    id: normalizedId,
+                    name: toolName
+                };
+            });
+
+            return { ...message, content: normalizedContent };
+        }
+
+        if (message.role === 'user') {
+            const normalizedContent = message.content.map((part: any) => {
+                if (part?.type !== 'tool_result') {
+                    return part;
+                }
+
+                const matchedIndex = pendingToolUses.findIndex((toolUse) =>
+                    toolUse.originalId === part.tool_use_id || toolUse.normalizedId === part.tool_use_id
+                );
+                const matched = matchedIndex >= 0
+                    ? pendingToolUses.splice(matchedIndex, 1)[0]
+                    : pendingToolUses.shift();
+
+                if (!matched) {
+                    return part;
+                }
+
+                if (part.tool_use_id !== matched.normalizedId) {
+                    rewrittenToolResults += 1;
+                }
+
+                return {
+                    ...part,
+                    tool_use_id: matched.normalizedId
+                };
+            });
+
+            return { ...message, content: normalizedContent };
+        }
+
+        return message;
+    });
+
+    if (rewrittenToolUses > 0 || rewrittenToolResults > 0) {
+        log(`[KIMI-ANTHROPIC] Normalized ${rewrittenToolUses} tool_use id(s), ${rewrittenToolResults} tool_result id(s)`);
+    }
+    if (pendingToolUses.length > 0) {
+        log(`[KIMI-ANTHROPIC] WARNING: ${pendingToolUses.length} tool_use(s) still have no matching tool_result after normalization`);
+    }
+
+    return normalizedMessages;
+}
+
+function buildAnthropicAssistantContent(turn: NormalizedTurn): any[] {
+    const content: any[] = [];
+    let textContent = turn.text || '';
+    const shouldParseThinking = (state.currentConfig.provider === 'minimax' && state.currentConfig.enableInterleavedThinking) ||
+        (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking) ||
+        state.currentConfig.provider === 'kimi-anthropic';
+
+    if (shouldParseThinking && textContent) {
+        const thinkMatch = textContent.match(/<think>([\s\S]*?)<\/think>/);
+        if (thinkMatch) {
+            const thinkingPart: any = { type: 'thinking', thinking: thinkMatch[1].trim() };
+            const thoughtSignature = (turn.toolUses || []).find((toolUse) => !!toolUse.thoughtSignature)?.thoughtSignature;
+            if (thoughtSignature) {
+                thinkingPart.signature = thoughtSignature;
+            }
+            content.push(thinkingPart);
+            log(`[DEBUG] Parsed thinking from history, length: ${thinkMatch[1].length}`);
+            textContent = textContent.replace(/<think>[\s\S]*?<\/think>\s*/, '').trim();
+        }
+    }
+
+    if (textContent) {
+        content.push({ type: 'text', text: textContent });
+    }
+
+    for (const toolUse of turn.toolUses || []) {
+        content.push({
+            type: 'tool_use',
+            id: toolUse.id,
+            name: toolUse.name,
+            input: toolUse.input
+        });
+    }
+
+    return content;
+}
+
+function buildAnthropicUserContent(turn: NormalizedTurn): any[] {
+    const content: any[] = [];
+
+    for (const toolResult of turn.toolResults || []) {
+        content.push({
+            type: 'tool_result',
+            tool_use_id: toolResult.id,
+            content: toolResult.content || ''
+        });
+    }
+
+    for (const image of turn.images || []) {
+        content.push({
+            type: 'image',
+            source: {
+                type: 'base64',
+                media_type: image.mimeType,
+                data: image.data
+            }
+        });
+    }
+
+    if (turn.text) {
+        content.push({ type: 'text', text: turn.text });
+    }
+
+    return content;
+}
+
 // ===== 将 Augment 请求转换为 Anthropic messages 格式 =====
 export function augmentToAnthropicMessages(req: any) {
     const messages: any[] = [];
-    const chatHistory = getEffectiveChatHistory(req);
-    // Anthropic API 要求每个 tool_use 后必须紧跟对应的 tool_result
-    // Augment 结构：exchange[i].response_nodes → tool_use, exchange[i+1].request_nodes → tool_result
-    for (let i = 0; i < chatHistory.length; i++) {
-        const exchange = chatHistory[i];
-        const nextExchange = chatHistory[i + 1];
-        if (i === 0) {
-            log(`[DEBUG] chat_history[0] keys: ${Object.keys(exchange).join(',')}`);
+    for (const turn of normalizeAugmentTimeline(req)) {
+        if (turn.role === 'assistant') {
+            if (turn.toolUses && turn.toolUses.length > 0) {
+                const content = buildAnthropicAssistantContent(turn);
+                messages.push({ role: 'assistant', content });
+                log(`[DEBUG] Added assistant message with ${turn.toolUses.length} tool_use(s)`);
+            } else if (turn.text) {
+                messages.push({ role: 'assistant', content: turn.text });
+            }
+            continue;
         }
-        // 1. 添加用户消息
-        if (exchange.request_message && exchange.request_message.trim()) {
-            messages.push({ role: 'user', content: exchange.request_message });
-        }
-        // 2. 处理 response_nodes
-        const responseNodes = exchange.response_nodes || [];
-        const toolUses: any[] = [];
-        let textContent = '';
-        for (const node of responseNodes) {
-            if (node.type === 5 && node.tool_use) {
-                const tu = node.tool_use;
-                const input = tu.input_json ? JSON.parse(tu.input_json) : (tu.input || {});
-                toolUses.push({
-                    type: 'tool_use',
-                    id: tu.tool_use_id || tu.id,
-                    name: tu.tool_name || tu.name,
-                    input: input
-                });
-                log(`[DEBUG] Parsed tool_use from history: ${tu.tool_name || tu.name}, id=${tu.tool_use_id || tu.id}`);
-            } else if (node.type === 0 && node.text_node) {
-                textContent += node.text_node.content || '';
-            }
-        }
-        if (toolUses.length > 0) {
-            const content: any[] = [];
-            // 思考模式: 解析 <think>...</think> 标签
-            const shouldParseThinking = (state.currentConfig.provider === 'minimax' && state.currentConfig.enableInterleavedThinking) ||
-                (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking);
-            if (shouldParseThinking && textContent) {
-                const thinkMatch = textContent.match(/<think>([\s\S]*?)<\/think>/);
-                if (thinkMatch) {
-                    content.push({ type: 'thinking', thinking: thinkMatch[1].trim() });
-                    log(`[DEBUG] Parsed thinking from history, length: ${thinkMatch[1].length}`);
-                    textContent = textContent.replace(/<think>[\s\S]*?<\/think>\s*/, '').trim();
-                }
-            }
-            if (textContent) {
-                content.push({ type: 'text', text: textContent });
-            }
-            content.push(...toolUses);
-            messages.push({ role: 'assistant', content: content });
-            log(`[DEBUG] Added assistant message with ${toolUses.length} tool_use(s)`);
-            // 3. 紧跟添加 tool_result
-            const toolResultNodes = nextExchange?.request_nodes || [];
-            for (const node of toolResultNodes) {
-                if (node.type === 1 && node.tool_result_node) {
-                    const toolResult = node.tool_result_node;
-                    messages.push({
-                        role: 'user',
-                        content: [{
-                            type: 'tool_result',
-                            tool_use_id: toolResult.tool_use_id || toolResult.id,
-                            content: toolResult.content || ''
-                        }]
-                    });
-                    log(`[DEBUG] Added tool_result for id: ${toolResult.tool_use_id || toolResult.id}`);
-                }
-            }
-        } else {
-            const response = exchange.response_text || exchange.response_message;
-            if (response) {
-                messages.push({ role: 'assistant', content: response });
+
+        const content = buildAnthropicUserContent(turn);
+        if (content.length === 1 && content[0].type === 'text') {
+            messages.push({ role: 'user', content: content[0].text });
+        } else if (content.length > 0) {
+            messages.push({ role: 'user', content });
+            const toolResultCount = (turn.toolResults || []).length;
+            if (toolResultCount > 0) {
+                log(`[DEBUG] Added ${toolResultCount} tool_result(s) to messages`);
             }
         }
     }
-    // 处理 nodes（文件内容、工具结果、图片）
-    const imageNodes: any[] = [];
-    const currentMessage = getCurrentMessageText(req);
-    const toolResults: any[] = [];
-    for (const node of req.nodes || []) {
-        const nodeType = node.type;
-        if (nodeType === 0) {
-            const textNode = node.text_node || {};
-            const content = textNode.content || '';
-            if (content && content !== currentMessage) {
-                messages.push({ role: 'user', content: content });
-            }
-        } else if (nodeType === 1) {
-            const toolResult = node.tool_result_node || {};
-            toolResults.push({
-                type: 'tool_result',
-                tool_use_id: toolResult.id || toolResult.tool_use_id,
-                content: toolResult.content || ''
-            });
-            log(`[DEBUG] Current request has tool_result for id: ${toolResult.id || toolResult.tool_use_id}`);
-        } else if (nodeType === 2) {
-            const imageNode = node.image_node || {};
-            const imageData = imageNode.image_data || '';
-            const format = imageNode.format || 1;
-            log(`[DEBUG] Image node: format=${format}, dataLen=${imageData.length}, keys=${Object.keys(imageNode).join(',')}`);
-            if (imageData) {
-                const formatMap: any = { 1: 'image/png', 2: 'image/jpeg', 3: 'image/gif', 4: 'image/webp' };
-                imageNodes.push({ data: imageData, mediaType: formatMap[format] || 'image/png' });
-                log(`[DEBUG] Image added: ${formatMap[format] || 'image/png'}, ${imageData.length} bytes`);
-            } else {
-                log(`[DEBUG] Image node has no image_data! Node keys: ${JSON.stringify(Object.keys(imageNode))}`);
-            }
-        }
-    }
-    if (toolResults.length > 0) {
-        messages.push({ role: 'user', content: toolResults });
-        log(`[DEBUG] Added ${toolResults.length} tool_result(s) to messages`);
-    }
-    // 构建最终用户消息
-    log(`[DEBUG] Building final message: message="${currentMessage.slice(0, 50)}...", imageNodes=${imageNodes.length}`);
-    if (currentMessage || imageNodes.length > 0) {
-        const contextParts: string[] = [];
-        if (req.path) contextParts.push(`File: ${req.path}`);
-        if (req.lang) contextParts.push(`Language: ${req.lang}`);
-        if (req.selected_code) contextParts.push(`Selected code:\n\`\`\`\n${req.selected_code}\n\`\`\``);
-        // 处理 blobs
-        const blobs = req.blobs;
-        if (blobs) {
-            if (Array.isArray(blobs)) {
-                for (const blob of blobs.slice(0, 10)) {
-                    if (typeof blob === 'object') {
-                        const name = blob.path || blob.name || 'unknown';
-                        const content = blob.content || '';
-                        if (content) contextParts.push(`File: ${name}\n\`\`\`\n${String(content).slice(0, 1000)}\n\`\`\``);
-                    }
-                }
-            } else if (typeof blobs === 'object') {
-                let blobCount = 0;
-                for (const [blobName, blobData] of Object.entries(blobs)) {
-                    if (blobCount >= 10) break;
-                    if (typeof blobData === 'object' && blobData !== null && (blobData as any).content) {
-                        contextParts.push(`File: ${blobName}\n\`\`\`\n${String((blobData as any).content).slice(0, 1000)}\n\`\`\``);
-                        blobCount++;
-                    } else if (typeof blobData === 'string') {
-                        contextParts.push(`File: ${blobName}\n\`\`\`\n${blobData.slice(0, 1000)}\n\`\`\``);
-                        blobCount++;
-                    }
-                }
-            }
-        }
-        // 处理 user_guided_blobs
-        const userBlobs = req.user_guided_blobs;
-        if (userBlobs) {
-            if (Array.isArray(userBlobs)) {
-                for (const blob of userBlobs.slice(0, 5)) {
-                    if (typeof blob === 'object') {
-                        const name = blob.path || blob.name || 'unknown';
-                        const content = blob.content || '';
-                        if (content) contextParts.push(`User file: ${name}\n\`\`\`\n${String(content).slice(0, 2000)}\n\`\`\``);
-                    }
-                }
-            } else if (typeof userBlobs === 'object') {
-                let count = 0;
-                for (const [name, data] of Object.entries(userBlobs)) {
-                    if (count >= 5) break;
-                    const content = typeof data === 'object' && data !== null ? (data as any).content : String(data);
-                    if (content) { contextParts.push(`User file: ${name}\n\`\`\`\n${String(content).slice(0, 2000)}\n\`\`\``); count++; }
-                }
-            }
-        }
-        if (req.prefix || req.suffix) {
-            const prefix = (req.prefix || '').slice(-2000);
-            const suffix = (req.suffix || '').slice(0, 2000);
-            if (prefix || suffix) contextParts.push(`Current file context:\n\`\`\`\n${prefix}[CURSOR]${suffix}\n\`\`\``);
-        }
-        let finalMessage = currentMessage;
-        if (contextParts.length > 0) {
-            finalMessage = contextParts.join('\n\n') + '\n\n' + currentMessage;
-        }
-        if (imageNodes.length > 0) {
-            const contentParts: any[] = [];
-            for (const img of imageNodes) {
-                contentParts.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
-            }
-            contentParts.push({ type: 'text', text: finalMessage });
-            messages.push({ role: 'user', content: contentParts });
-        } else {
-            messages.push({ role: 'user', content: finalMessage });
-        }
-    }
+
     if (messages.length === 0) {
         messages.push({ role: 'user', content: 'Hello' });
     }
-    return messages;
+
+    return normalizeKimiAnthropicMessages(messages);
+}
+
+
+export function splitReasoningContentFromText(text?: string): { content?: string; reasoningContent?: string } {
+    if (!text) {
+        return {};
+    }
+
+    const reasoningParts: string[] = [];
+    const content = text
+        .replace(/<think>([\s\S]*?)<\/think>/g, (_, reasoningPart: string) => {
+            const trimmedReasoning = reasoningPart.trim();
+            if (trimmedReasoning) {
+                reasoningParts.push(trimmedReasoning);
+            }
+            return '';
+        })
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    return {
+        content: content || undefined,
+        reasoningContent: reasoningParts.join('\n\n') || undefined
+    };
 }
 
 
@@ -573,6 +726,7 @@ export function augmentToOpenAIMessages(req: any) {
     for (const turn of normalizeAugmentTimeline(req)) {
         if (turn.role === 'assistant') {
             if (turn.toolUses && turn.toolUses.length > 0) {
+                const { content, reasoningContent } = splitReasoningContentFromText(turn.text);
                 const assistantMessage: any = {
                     role: 'assistant',
                     tool_calls: turn.toolUses.map((toolUse) => ({
@@ -581,8 +735,13 @@ export function augmentToOpenAIMessages(req: any) {
                         function: { name: toolUse.name, arguments: toolUse.inputJson }
                     }))
                 };
-                if (turn.text) {
-                    assistantMessage.content = turn.text;
+                if (content) {
+                    assistantMessage.content = content;
+                } else if (reasoningContent) {
+                    assistantMessage.content = null;
+                }
+                if (reasoningContent) {
+                    assistantMessage.reasoning_content = reasoningContent;
                 }
                 messages.push(assistantMessage);
                 continue;
@@ -598,6 +757,7 @@ export function augmentToOpenAIMessages(req: any) {
             messages.push({
                 role: 'tool',
                 tool_call_id: toolResult.id,
+                name: toolResult.name || 'unknown',
                 content: toolResult.content || ''
             });
         }

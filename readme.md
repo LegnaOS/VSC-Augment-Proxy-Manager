@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.3.4-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.3.5-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -37,8 +37,9 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 | **DeepSeek** | Anthropic 兼容 | `deepseek-chat` |
 | **Google Gemini** | Google 原生 | `gemini-3-pro-preview` |
 | **OpenAI** | 原生 | `gpt-4` |
-| **GLM (智谱)** | OpenAI 兼容 | `glm-5` |
-| **Kimi (月之暗面)** | OpenAI 兼容 | `moonshot-v1-auto` |
+| **GLM (智谱)** | OpenAI 兼容 | `glm-4.7` |
+| **Kimi (月之暗面)** | OpenAI 兼容 | `kimi-k2.5` |
+| **Kimi Coding Plan** | Anthropic Messages 兼容 | `kimi-for-coding` |
 | **自定义** | Anthropic / OpenAI | — |
 
 ## 快速开始
@@ -71,6 +72,8 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 - **协议转换层** — 代理统一承接 Augment 请求格式，并转换到 Anthropic / OpenAI / Google 等不同后端协议
 - **continuity 修复** — 保留原始 `chat_history`，压缩结果写入 `compressed_chat_history`，避免多步任务上下文被压坏
 - **状态端点最小实现** — `/save-chat`、`/record-session-events`、`/record-user-events`、`/record-request-events`、`/context-canvas/list` 已从固定成功响应调整为最小状态实现
+- **Kimi 工具链兼容修复** — 补齐 `tool_call_id` / `tool_name` 映射，稳定 `tool_use ↔ tool_result` 邻接关系
+- **Kimi reasoning / thinking 回放修复** — continuation 历史中的 `<think>...</think>` 会被拆分并回放到 `reasoning_content` / `thinking`
 - **配置热更新** — 切换供应商或模型无需重启代理，实时生效
 
 ### 🔍 RAG 语义搜索
@@ -161,6 +164,14 @@ src/
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
 ## 更新日志
+
+### v3.3.5 — Kimi 工具链闭环 + 标准 API reasoning 修复
+
+- **Kimi standard API continuation** — `assistant + tool_calls` 历史回放时补齐 `reasoning_content`，修复 Moonshot/Kimi 第二轮 continuation 直接 400 的问题
+- **Kimi Coding / Anthropic tool chain** — 补齐 `tool_call_id → tool_use_id`、`tool_name` 映射，修复 `tool_call_id is not found` / tool adjacency 错位
+- **timeline normalization** — 增加 turn merge / adjacency stabilize / forward-vs-reversed scoring，降低脏历史导致的工具链断裂概率
+- **thinking replay** — `kimi-anthropic` 历史中的 `<think>...</think>` 与 `thought_signature` 现在会回放为 Anthropic `thinking` block
+- **known issues** — `api.kimi.com/coding/v1/messages` 需要有效的 Kimi Coding subscription；标准 API 若遇到 `429 engine_overloaded_error` 属于上游容量问题，不是本地协议错误
 
 ### v3.3.4 — Continuity 修复 + 协议状态承接
 
