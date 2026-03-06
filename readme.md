@@ -4,11 +4,11 @@
 
 # Augment Proxy Manager
 
-**用任意 AI 供应商驱动 Augment 的强大编码 Agent。**
+**Augment 前端 + 多模型后端的本地协议代理。**
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.1.4-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.3.4-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -18,6 +18,8 @@
 ## 工作原理
 
 Augment Proxy Manager 运行一个本地 HTTP 代理服务器，拦截 Augment 扩展的 API 请求并转发到你选择的 AI 供应商。
+
+代理层负责承接 Augment 的请求格式、上下文投影、工具调用和状态端点，再转换到不同模型后端。
 
 ```
 Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
@@ -66,6 +68,9 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 - **零注入绕过** — 自动配置 Augment 使用代理，无需修改任何代码
 - **流式响应** — 聊天、补全、指令全程实时 SSE 流式传输
 - **完整 Agent 模式** — 工具调用、文件编辑、代码库检索全部正常工作
+- **协议转换层** — 代理统一承接 Augment 请求格式，并转换到 Anthropic / OpenAI / Google 等不同后端协议
+- **continuity 修复** — 保留原始 `chat_history`，压缩结果写入 `compressed_chat_history`，避免多步任务上下文被压坏
+- **状态端点最小实现** — `/save-chat`、`/record-session-events`、`/record-user-events`、`/record-request-events`、`/context-canvas/list` 已从固定成功响应调整为最小状态实现
 - **配置热更新** — 切换供应商或模型无需重启代理，实时生效
 
 ### 🔍 RAG 语义搜索
@@ -156,6 +161,14 @@ src/
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
 ## 更新日志
+
+### v3.3.4 — Continuity 修复 + 协议状态承接
+
+- **continuation handling** — `"..."` 按 continuation signal 处理，不再改写用户消息内容
+- **history projection** — 原始 `chat_history` 保留，压缩结果写入 `compressed_chat_history`
+- **state endpoints** — `save-chat` / `record-*` / `context-canvas/list` 新增最小状态写入与读取逻辑
+- **request serialization** — 同一 `conversation_id` 的请求统一进入 `state.conversationQueues`
+- **runtime smoke** — 已验证 `save-chat`、`record-session-events`、`record-user-events`、`record-request-events`、`context-canvas/list`、`generate-conversation-title`
 
 ### v3.1.4 — Agent 循环修复 + 任务系统生效
 

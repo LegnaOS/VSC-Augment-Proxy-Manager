@@ -8,6 +8,8 @@ export async function applyContextCompression(augmentReq: any, providerName: str
     const compressionThresholdPercent = config.get('compressionThreshold', 60) as number; // 降低到 60%
     const compressionThreshold = compressionThresholdPercent / 100;
 
+    delete augmentReq.compressed_chat_history;
+
     if (!enableCompression || !augmentReq.chat_history || augmentReq.chat_history.length === 0) return;
 
     const modelName = state.currentConfig.model || 'unknown';
@@ -38,7 +40,7 @@ export async function applyContextCompression(augmentReq: any, providerName: str
     if (contextStats.needs_compression || contextStats.usage_percentage > (preemptiveThreshold * 100)) {
         const compressionResult = await compressChatHistoryByTokens(augmentReq.chat_history, tokenLimit, 0.3, compressionThreshold); // 目标 30%
         if (compressionResult.compressed_count < compressionResult.original_count) {
-            augmentReq.chat_history = compressionResult.compressed_exchanges;
+            augmentReq.compressed_chat_history = compressionResult.compressed_exchanges;
             log(`[CONTEXT] ✂️ 压缩: ${compressionResult.original_count} → ${compressionResult.compressed_count} 次交互`);
             log(`[CONTEXT] 📉 Token: ${compressionResult.estimated_tokens_before} → ${compressionResult.estimated_tokens_after} (${(compressionResult.compression_ratio * 100).toFixed(1)}%)`);
             if (compressionResult.summary) log(`[CONTEXT] 📝 摘要: ${compressionResult.summary.slice(0, 80)}...`);

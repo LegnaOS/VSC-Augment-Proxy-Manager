@@ -604,6 +604,20 @@ function updateEmbeddingUI(status) {
     }
     cacheCount.textContent = status.cacheCount || 0;
 }
+function updateContextUI(status) {
+    if (!status) return;
+    const tokenLimit = status.token_limit || 200000;
+    const tokenLimitK = tokenLimit >= 1000000 ? (tokenLimit / 1000000).toFixed(1) + 'M' : (tokenLimit / 1000).toFixed(0) + 'K';
+    const estimatedTokens = status.estimated_tokens || 0;
+    const usagePercent = status.usage_percentage || 0;
+    let color = '#4caf50';
+    if (usagePercent > 80) color = '#f44336';
+    else if (usagePercent > 60) color = '#ff9800';
+    document.getElementById('contextTokens').textContent = estimatedTokens + ' / ' + tokenLimitK + ' (' + usagePercent.toFixed(1) + '%)';
+    document.getElementById('contextTokens').style.color = color;
+    document.getElementById('contextExchanges').textContent = status.total_exchanges || 0;
+    document.getElementById('contextCompression').style.display = status.compressed ? 'block' : 'none';
+}
 window.addEventListener('message', e => {
     const msg = e.data;
     if (msg.type === 'status') {
@@ -612,17 +626,8 @@ window.addEventListener('message', e => {
         document.getElementById('startBtn').disabled = msg.proxyRunning;
         document.getElementById('stopBtn').disabled = !msg.proxyRunning;
     } else if (msg.type === 'embeddingStatus') { updateEmbeddingUI(msg); }
-    else if (msg.type === 'contextStatus') {
-        const tokenLimit = msg.token_limit || 200000;
-        const tokenLimitK = tokenLimit >= 1000000 ? (tokenLimit / 1000000).toFixed(1) + 'M' : (tokenLimit / 1000).toFixed(0) + 'K';
-        const estimatedTokens = msg.estimated_tokens || 0; const usagePercent = msg.usage_percentage || 0;
-        let color = '#4caf50'; if (usagePercent > 80) color = '#f44336'; else if (usagePercent > 60) color = '#ff9800';
-        document.getElementById('contextTokens').textContent = estimatedTokens + ' / ' + tokenLimitK + ' (' + usagePercent.toFixed(1) + '%)';
-        document.getElementById('contextTokens').style.color = color;
-        document.getElementById('contextExchanges').textContent = msg.total_exchanges || 0;
-        const compressionDiv = document.getElementById('contextCompression');
-        if (msg.compressed) compressionDiv.style.display = 'block'; else compressionDiv.style.display = 'none';
-    } else if (msg.type === 'modelsList') {
+    else if (msg.type === 'contextStatus') { updateContextUI(msg); }
+    else if (msg.type === 'modelsList') {
         $refreshModelsBtn.disabled = false;
         if (msg.error) { $modelInfo.textContent = '❌ ' + msg.error; $modelInfo.style.color = '#f44336'; }
         else if (msg.models && msg.models.length > 0) {
@@ -644,18 +649,7 @@ window.addEventListener('message', e => {
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);
         document.getElementById('compressionThreshold').value = msg.config.compressionThreshold || 80;
-        // 恢复上下文状态
-        if (msg.contextStatus) {
-            const cs = msg.contextStatus;
-            const tokenLimit = cs.token_limit || 200000;
-            const tokenLimitK = tokenLimit >= 1000000 ? (tokenLimit / 1000000).toFixed(1) + 'M' : (tokenLimit / 1000).toFixed(0) + 'K';
-            const estimatedTokens = cs.estimated_tokens || 0; const usagePercent = cs.usage_percentage || 0;
-            let color = '#4caf50'; if (usagePercent > 80) color = '#f44336'; else if (usagePercent > 60) color = '#ff9800';
-            document.getElementById('contextTokens').textContent = estimatedTokens + ' / ' + tokenLimitK + ' (' + usagePercent.toFixed(1) + '%)';
-            document.getElementById('contextBar').style.width = Math.min(usagePercent, 100) + '%';
-            document.getElementById('contextBar').style.background = color;
-            document.getElementById('contextExchanges').textContent = cs.total_exchanges + ' 次交互' + (cs.compressed ? ' (已压缩)' : '');
-        }
+        if (msg.contextStatus) updateContextUI(msg.contextStatus);
         // 恢复 Embedding 配置状态
         if (msg.config.embedding) {
             $embEnabled.checked = msg.config.embedding.enabled || false;

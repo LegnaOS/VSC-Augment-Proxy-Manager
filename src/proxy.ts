@@ -4,9 +4,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { state, log } from './globals';
+import type { CanvasState, ConversationState, RecordedEvent } from './globals';
 import { CodebaseRetrievalRequest, CodeSnippet } from './types';
 import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS, isAnthropicFormat, isGoogleFormat } from './config';
-import { extractWorkspaceInfo, buildSystemPrompt, sendAugmentError } from './messages';
+import { sendAugmentError } from './messages';
 import { forwardToAnthropicStream } from './providers/anthropic';
 import { forwardToOpenAIStream } from './providers/openai';
 import { forwardToGoogleStream } from './providers/google';
@@ -15,8 +16,146 @@ const { SemanticEmbeddings, LOCAL_MODELS } = require('./rag/embeddings');
 import { VikingContextStore } from './rag/viking-context';
 import { SessionMemory } from './rag/session-memory';
 
-// ========== 会话级请求队列 ==========
-const conversationQueues = new Map<string, Promise<void>>();
+const MAX_EVENTS_PER_KEY = 200;
+
+function sendJson(res: any, payload: any, statusCode = 200) {
+    if (!res.headersSent) {
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    }
+    res.end(JSON.stringify(payload));
+}
+
+function readRequestBody(req: any): Promise<string> {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (chunk: any) => body += chunk);
+        req.on('end', () => resolve(body));
+        req.on('error', (error: any) => reject(error));
+    });
+}
+
+async function readJsonBody(req: any): Promise<any> {
+    const body = await readRequestBody(req);
+    if (!body.trim()) return {};
+    return JSON.parse(body);
+}
+
+function pickString(data: any, ...keys: string[]): string | undefined {
+    if (!data || typeof data !== 'object') return undefined;
+    for (const key of keys) {
+        const value = data[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return undefined;
+}
+
+function pickArray(data: any, ...keys: string[]): any[] {
+    if (!data || typeof data !== 'object') return [];
+    for (const key of keys) {
+        const value = data[key];
+        if (Array.isArray(value)) return value;
+    }
+    return [];
+}
+
+function nowIso(): string {
+    return new Date().toISOString();
+}
+
+function isContinuationSignal(message: unknown): boolean {
+    return typeof message === 'string' && message.trim() === '...';
+}
+
+function deriveConversationTitle(conversationId?: string, fallbackMessage?: string): string {
+    const conversation = conversationId ? state.conversationStates.get(conversationId) : undefined;
+    const title = conversation?.title?.trim();
+    if (title) return title;
+    const source = fallbackMessage || conversation?.lastMessage || '';
+    const compact = source.replace(/\s+/g, ' ').trim();
+    if (!compact) return 'Chat';
+    return compact.slice(0, 60);
+}
+
+function extractEvents(data: any): any[] {
+    if (Array.isArray(data)) return data;
+    const candidates = ['events', 'session_events', 'user_events', 'request_events', 'items'];
+    for (const key of candidates) {
+        if (Array.isArray(data?.[key])) return data[key];
+    }
+    return data && typeof data === 'object' ? [data] : [];
+}
+
+function appendStoredEvents(store: Map<string, RecordedEvent[]>, key: string, events: RecordedEvent[]) {
+    const existing = store.get(key) || [];
+    const merged = existing.concat(events);
+    store.set(key, merged.slice(Math.max(0, merged.length - MAX_EVENTS_PER_KEY)));
+}
+
+function upsertCanvasState(canvasId: string, updates: Partial<CanvasState> = {}): CanvasState {
+    const existing = state.canvasStates.get(canvasId);
+    const timestamp = nowIso();
+    const next: CanvasState = {
+        canvasId,
+        conversationId: updates.conversationId ?? existing?.conversationId,
+        title: updates.title ?? existing?.title ?? 'Chat',
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+        metadata: { ...(existing?.metadata || {}), ...(updates.metadata || {}) }
+    };
+    state.canvasStates.set(canvasId, next);
+    return next;
+}
+
+function upsertConversationState(payload: any): ConversationState | undefined {
+    const conversationId = pickString(payload, 'conversation_id', 'conversationId');
+    if (!conversationId) return undefined;
+    const existing = state.conversationStates.get(conversationId);
+    const canvasId = pickString(payload, 'canvas_id', 'canvasId') ?? existing?.canvasId;
+    const title = pickString(payload, 'title', 'conversation_title', 'conversationTitle') ?? existing?.title;
+    const timestamp = nowIso();
+    const next: ConversationState = {
+        conversationId,
+        canvasId,
+        title,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+        lastMessage: pickString(payload, 'message', 'request_message', 'requestMessage') ?? existing?.lastMessage,
+        lastRequestId: pickString(payload, 'request_id', 'requestId') ?? existing?.lastRequestId,
+        chatHistory: pickArray(payload, 'chat_history', 'history').length > 0 ? pickArray(payload, 'chat_history', 'history') : (existing?.chatHistory || []),
+        compressedChatHistory: pickArray(payload, 'compressed_chat_history').length > 0 ? pickArray(payload, 'compressed_chat_history') : existing?.compressedChatHistory,
+        nodes: pickArray(payload, 'nodes').length > 0 ? pickArray(payload, 'nodes') : (existing?.nodes || []),
+        metadata: { ...(existing?.metadata || {}), ...(payload?.metadata || {}) }
+    };
+    state.conversationStates.set(conversationId, next);
+    if (canvasId) {
+        upsertCanvasState(canvasId, { conversationId, title });
+    }
+    return next;
+}
+
+function normalizeRecordedEvent(source: 'session' | 'user' | 'request', event: any, fallback: any): RecordedEvent {
+    const recordedAt = pickString(event, 'recorded_at', 'created_at', 'timestamp') || nowIso();
+    return {
+        id: pickString(event, 'id', 'event_id', 'uuid') || `${source}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        source,
+        type: pickString(event, 'type', 'event_type', 'name', 'eventName') || 'unknown',
+        recordedAt,
+        conversationId: pickString(event, 'conversation_id', 'conversationId') || pickString(fallback, 'conversation_id', 'conversationId'),
+        sessionId: pickString(event, 'session_id', 'sessionId') || pickString(fallback, 'session_id', 'sessionId'),
+        requestId: pickString(event, 'request_id', 'requestId') || pickString(fallback, 'request_id', 'requestId'),
+        canvasId: pickString(event, 'canvas_id', 'canvasId') || pickString(fallback, 'canvas_id', 'canvasId'),
+        userId: pickString(event, 'user_id', 'userId') || pickString(fallback, 'user_id', 'userId'),
+        payload: event
+    };
+}
+
+function listCanvasStates(conversationId?: string): CanvasState[] {
+    let canvases = Array.from(state.canvasStates.values());
+    if (conversationId) {
+        canvases = canvases.filter(canvas => canvas.conversationId === conversationId);
+    }
+    return canvases.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
 
 // ========== Viking/RAG 工作区扫描 ==========
 async function scanAndIndexWorkspace(rootPath: string) {
@@ -100,7 +239,7 @@ export function handleProxyRequest(req: any, res: any) {
     else if (urlPath === '/client-metrics') handleClientMetrics(req, res);
     else if (urlPath === '/client-completion-timelines') handleClientCompletionTimelines(req, res);
     else if (urlPath === '/batch-upload') handleBatchUpload(req, res);
-    else if (urlPath === '/notifications/read') handleNotificationsRead(req, res);
+    else if (urlPath === '/notifications/read' || urlPath === '/notifications/mark-read') handleNotificationsRead(req, res);
     else if (urlPath === '/record-request-events') handleRecordRequestEvents(req, res);
     else if (urlPath === '/report-feature-vector') handleReportFeatureVector(req, res);
     else if (urlPath === '/remote-agents/list-stream') handleRemoteAgentsListStream(req, res);
@@ -111,13 +250,15 @@ export function handleProxyRequest(req: any, res: any) {
     else if (urlPath === '/get-credit-info') handleGetCreditInfo(req, res);
     else if (urlPath === '/subscription-banner') handleSubscriptionBanner(req, res);
     else if (urlPath === '/generate-conversation-title') handleGenerateConversationTitle(req, res);
-    else if (urlPath === '/record-session-events' || urlPath === '/record-user-events'
-        || urlPath === '/resolve-completions' || urlPath === '/resolve-edit'
+    else if (urlPath === '/save-chat') handleSaveChat(req, res);
+    else if (urlPath === '/record-session-events') handleRecordSessionEvents(req, res);
+    else if (urlPath === '/record-user-events') handleRecordUserEvents(req, res);
+    else if (urlPath === '/context-canvas/list') handleContextCanvasList(req, res);
+    else if (urlPath === '/resolve-completions' || urlPath === '/resolve-edit'
         || urlPath === '/resolve-instruction' || urlPath === '/resolve-smart-paste'
         || urlPath === '/resolve-next-edit' || urlPath === '/completion-feedback'
         || urlPath === '/chat-feedback' || urlPath === '/next-edit-feedback'
         || urlPath === '/record-preference-sample' || urlPath === '/notifications/mark-as-read'
-        || urlPath === '/save-chat' || urlPath === '/context-canvas/list'
         || urlPath === '/resolve-chat-input-completion'
         || urlPath === '/agents/revoke-tool-access' || urlPath === '/checkpoint-blobs'
         || urlPath === '/prompt-enhancer' || urlPath === '/token'
@@ -268,8 +409,19 @@ function handleSubscriptionBanner(req: any, res: any) {
 }
 function handleGenerateConversationTitle(req: any, res: any) {
     let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ title: "Chat" }));
+        try {
+            const data = body.trim() ? JSON.parse(body) : {};
+            const conversationId = pickString(data, 'conversation_id', 'conversationId');
+            const fallbackMessage = pickString(data, 'message', 'request_message', 'requestMessage');
+            const title = deriveConversationTitle(conversationId, fallbackMessage);
+            if (conversationId) {
+                upsertConversationState({ conversation_id: conversationId, title, message: fallbackMessage });
+            }
+            sendJson(res, { title });
+        } catch (error: any) {
+            log(`[GENERATE-CONVERSATION-TITLE] Error: ${error}`);
+            sendJson(res, { title: 'Chat', error: error.message || String(error) });
+        }
     });
 }
 function handleChatInputCompletion(req: any, res: any) {
@@ -567,8 +719,109 @@ function handleBatchUpload(req: any, res: any) {
 function handleNotificationsRead(req: any, res: any) {
     let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ notifications: [] })); });
 }
-function handleRecordRequestEvents(req: any, res: any) {
-    let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: true })); });
+async function handleSaveChat(req: any, res: any) {
+    try {
+        const body = await readJsonBody(req);
+        const conversation = upsertConversationState(body);
+        const conversationId = conversation?.conversationId;
+        const canvasId = conversation?.canvasId ?? pickString(body, 'canvas_id', 'canvasId');
+        if (canvasId) {
+            upsertCanvasState(canvasId, {
+                conversationId,
+                title: conversation?.title ?? pickString(body, 'title', 'conversation_title', 'conversationTitle')
+            });
+        }
+        sendJson(res, {
+            success: true,
+            conversation_id: conversationId,
+            canvas_id: canvasId,
+            title: conversation?.title ?? 'Chat'
+        });
+    } catch (error: any) {
+        log(`[SAVE-CHAT] Error: ${error}`);
+        sendJson(res, { success: false, error: error.message || String(error) });
+    }
+}
+async function handleRecordSessionEvents(req: any, res: any) {
+    try {
+        const body = await readJsonBody(req);
+        const events = extractEvents(body).map(event => normalizeRecordedEvent('session', event, body));
+        const sessionId = pickString(body, 'session_id', 'sessionId') || events[0]?.sessionId || 'default';
+        appendStoredEvents(state.sessionEventStore, sessionId, events);
+        if (pickString(body, 'conversation_id', 'conversationId') || pickString(body, 'canvas_id', 'canvasId')) {
+            upsertConversationState(body);
+        }
+        sendJson(res, {
+            success: true,
+            recorded: events.length,
+            session_id: sessionId,
+            conversation_id: pickString(body, 'conversation_id', 'conversationId'),
+            canvas_id: pickString(body, 'canvas_id', 'canvasId')
+        });
+    } catch (error: any) {
+        log(`[RECORD-SESSION-EVENTS] Error: ${error}`);
+        sendJson(res, { success: false, error: error.message || String(error) });
+    }
+}
+async function handleRecordUserEvents(req: any, res: any) {
+    try {
+        const body = await readJsonBody(req);
+        const events = extractEvents(body).map(event => normalizeRecordedEvent('user', event, body));
+        const userId = pickString(body, 'user_id', 'userId') || events[0]?.userId || pickString(body, 'conversation_id', 'conversationId') || 'default';
+        appendStoredEvents(state.userEventStore, userId, events);
+        if (pickString(body, 'conversation_id', 'conversationId') || pickString(body, 'canvas_id', 'canvasId')) {
+            upsertConversationState(body);
+        }
+        sendJson(res, {
+            success: true,
+            recorded: events.length,
+            user_id: userId,
+            conversation_id: pickString(body, 'conversation_id', 'conversationId'),
+            canvas_id: pickString(body, 'canvas_id', 'canvasId')
+        });
+    } catch (error: any) {
+        log(`[RECORD-USER-EVENTS] Error: ${error}`);
+        sendJson(res, { success: false, error: error.message || String(error) });
+    }
+}
+async function handleRecordRequestEvents(req: any, res: any) {
+    try {
+        const body = await readJsonBody(req);
+        const events = extractEvents(body).map(event => normalizeRecordedEvent('request', event, body));
+        const requestId = pickString(body, 'request_id', 'requestId') || events[0]?.requestId || 'default';
+        appendStoredEvents(state.requestEventStore, requestId, events);
+        const conversation = upsertConversationState(body);
+        if (conversation && requestId && requestId !== 'default') {
+            state.conversationStates.set(conversation.conversationId, { ...conversation, lastRequestId: requestId, updatedAt: nowIso() });
+        }
+        sendJson(res, {
+            success: true,
+            recorded: events.length,
+            request_id: requestId,
+            conversation_id: pickString(body, 'conversation_id', 'conversationId'),
+            canvas_id: pickString(body, 'canvas_id', 'canvasId')
+        });
+    } catch (error: any) {
+        log(`[RECORD-REQUEST-EVENTS] Error: ${error}`);
+        sendJson(res, { success: false, error: error.message || String(error) });
+    }
+}
+async function handleContextCanvasList(req: any, res: any) {
+    try {
+        const body = await readJsonBody(req);
+        const conversationId = pickString(body, 'conversation_id', 'conversationId');
+        const canvases = listCanvasStates(conversationId).map(canvas => ({
+            canvas_id: canvas.canvasId,
+            conversation_id: canvas.conversationId,
+            title: canvas.title,
+            created_at: canvas.createdAt,
+            updated_at: canvas.updatedAt
+        }));
+        sendJson(res, { canvases, items: canvases, success: true });
+    } catch (error: any) {
+        log(`[CONTEXT-CANVAS-LIST] Error: ${error}`);
+        sendJson(res, { canvases: [], items: [], success: false, error: error.message || String(error) });
+    }
 }
 function handleReportFeatureVector(req: any, res: any) {
     let body = ''; req.on('data', (c: any) => body += c); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: true })); });
@@ -607,55 +860,24 @@ function handleChatStream(req: any, res: any) {
             const conversationId = augmentReq.conversation_id || '';
             const historyCount = augmentReq.chat_history?.length || 0;
             log(`[CHAT-STREAM] message: "${(augmentReq.message || '').slice(0, 50)}..." history: ${historyCount}`);
+            upsertConversationState(augmentReq);
 
             // 会话级请求队列 — 防止同一会话并发请求导致工具在 checkingSafety 阶段被取消
-            const pending = conversationQueues.get(conversationId);
+            const pending = state.conversationQueues.get(conversationId);
             if (pending) { log(`[QUEUE] Waiting for pending request on conversation ${conversationId.substring(0, 8)}...`); try { await pending; } catch {} log(`[QUEUE] Previous request completed, proceeding...`); }
             let resolveReq: () => void;
             const curPromise = new Promise<void>(r => { resolveReq = r; });
-            conversationQueues.set(conversationId, curPromise);
+            state.conversationQueues.set(conversationId, curPromise);
 
             try {
-                const workspaceInfo = extractWorkspaceInfo(augmentReq);
-
                 // ========== Viking/RAG 上下文注入 ==========
                 const userMsg = augmentReq.message || augmentReq.request_message || '';
                 let vikingContext = '';
                 let ragResults: string[] = [];
 
-                // 检测是否是工具执行后的"..."消息
-                const isToolContinuation = userMsg.trim() === '...' && augmentReq.chat_history && augmentReq.chat_history.length > 0;
-
-                // 如果是"..."，从历史中提取原始任务指令
+                const isToolContinuation = isContinuationSignal(userMsg) && augmentReq.chat_history && augmentReq.chat_history.length > 0;
                 if (isToolContinuation) {
-                    // 从对话历史中找到最近的用户指令
-                    let originalTask = '';
-                    for (let i = augmentReq.chat_history.length - 1; i >= 0; i--) {
-                        const msg = augmentReq.chat_history[i].request_message || '';
-                        if (msg && msg.trim() !== '...' && msg.length > 10) {
-                            originalTask = msg;
-                            break;
-                        }
-                    }
-
-                    if (originalTask) {
-                        augmentReq.message = `你正在执行一个多步骤任务。原始任务：${originalTask}
-
-🎯 执行规则：
-1. 这是一个需要多次工具调用才能完成的任务
-2. 你必须持续调用工具,直到任务100%完成
-3. 不要在中途停下来,不要问用户"接下来做什么"
-4. 不要只执行一个步骤就停止,要完成整个任务
-5. 忽略小的语法错误(如双分号、引号等),专注于功能实现
-6. 如果任务涉及多个文件,依次修改所有文件
-7. 每次工具调用后,立即继续下一步,不要等待
-
-⚠️ 重要：不要停止,继续执行任务直到完全完成!`;
-                        log(`[CHAT-STREAM] 检测到工具延续消息，注入强化多步骤任务指令`);
-                    } else {
-                        augmentReq.message = `继续执行任务。这是一个多步骤任务,你必须持续调用工具直到完全完成。不要停止,不要问用户,立即继续下一步。`;
-                        log(`[CHAT-STREAM] 检测到工具延续消息，已转换为明确指令`);
-                    }
+                    log('[CHAT-STREAM] 检测到 continuation signal，保留原始消息，不做 prompt hack');
                 }
 
                 // 1. RAG 检索相关代码（跳过"..."消息的检索）
@@ -703,7 +925,7 @@ function handleChatStream(req: any, res: any) {
                 }
 
                 // v2.0.0: Session Memory — 从用户消息中提取偏好
-                if (userMsg && state.sessionMemory) {
+                if (userMsg && !isToolContinuation && state.sessionMemory) {
                     state.sessionMemory.extractFromUserMessage(userMsg, conversationId).catch(() => {});
                 }
 
@@ -715,7 +937,7 @@ function handleChatStream(req: any, res: any) {
                 else await forwardToOpenAIStream(augmentReq, res);
             } finally {
                 resolveReq!();
-                if (conversationQueues.get(conversationId) === curPromise) conversationQueues.delete(conversationId);
+                if (state.conversationQueues.get(conversationId) === curPromise) state.conversationQueues.delete(conversationId);
                 log(`[QUEUE] Request completed for conversation ${conversationId.substring(0, 8)}`);
             }
         } catch (error: any) {

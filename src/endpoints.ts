@@ -23,6 +23,8 @@ export const AUGMENT_ENDPOINTS = [
     // 订阅和用户
     '/subscription-banner',
     '/save-chat',
+    '/context-canvas/list',
+    '/generate-conversation-title',
     // 用户密钥
     '/user-secrets/list',
     '/user-secrets/upsert',
@@ -33,6 +35,7 @@ export const AUGMENT_ENDPOINTS = [
     // 遥测和事件
     '/client-completion-timelines',
     '/record-session-events',
+    '/record-user-events',
     '/record-request-events',
     // 其他
     '/next-edit-stream',

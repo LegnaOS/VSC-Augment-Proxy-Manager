@@ -158,6 +158,10 @@ function estimateExchangesTokens(exchanges: Exchange[]): number {
     return totalTokens;
 }
 
+function hasToolUse(exchange?: Exchange): boolean {
+    return !!exchange?.response_nodes?.some((node: any) => node.type === 5 && node.tool_use);
+}
+
 /**
  * 获取上下文统计信息
  */
@@ -238,8 +242,14 @@ export async function compressChatHistoryByTokens(
     keepCount = Math.max(keepCount, Math.min(3, chatHistory.length));
     
     // 分离最近的和需要压缩的历史
-    const recentExchanges = chatHistory.slice(-keepCount);
-    const oldExchanges = chatHistory.slice(0, -keepCount);
+    // 不要在 tool_use / tool_result 的边界中间切断，否则会破坏多步任务连续性
+    let splitIndex = Math.max(0, chatHistory.length - keepCount);
+    while (splitIndex > 0 && hasToolUse(chatHistory[splitIndex - 1])) {
+        splitIndex--;
+    }
+
+    const recentExchanges = chatHistory.slice(splitIndex);
+    const oldExchanges = chatHistory.slice(0, splitIndex);
 
     if (oldExchanges.length === 0) {
         return {
@@ -255,6 +265,7 @@ export async function compressChatHistoryByTokens(
     // 生成旧历史的摘要
     const summary = generateHistorySummary(oldExchanges);
     const summaryTokens = estimateTokens(summary);
+    const recentTokens = estimateExchangesTokens(recentExchanges);
 
     // 创建一个摘要交互
     const summaryExchange: Exchange = {
@@ -269,7 +280,7 @@ export async function compressChatHistoryByTokens(
     };
 
     const compressedExchanges = [summaryExchange, ...recentExchanges];
-    const tokensAfter = summaryTokens + accumulatedTokens;
+    const tokensAfter = summaryTokens + recentTokens;
     
     return {
         compressed_exchanges: compressedExchanges,
@@ -278,7 +289,7 @@ export async function compressChatHistoryByTokens(
         compressed_count: compressedExchanges.length,
         estimated_tokens_before: tokensBefore,
         estimated_tokens_after: tokensAfter,
-        compression_ratio: tokensAfter / tokensBefore
+        compression_ratio: tokensBefore > 0 ? tokensAfter / tokensBefore : 1.0
     };
 }
 

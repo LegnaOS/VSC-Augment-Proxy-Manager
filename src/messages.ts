@@ -231,14 +231,156 @@ export function sendAugmentError(res: any, message: string) {
     } catch (e) { /* 连接可能已关闭 */ }
 }
 
+interface NormalizedToolUse {
+    id: string;
+    name: string;
+    input: any;
+    inputJson: string;
+    thoughtSignature?: string;
+}
+
+interface NormalizedToolResult {
+    id: string;
+    name: string;
+    content: string;
+}
+
+interface NormalizedTurn {
+    role: 'user' | 'assistant';
+    text?: string;
+    toolUses?: NormalizedToolUse[];
+    toolResults?: NormalizedToolResult[];
+    images?: Array<{ mimeType: string; data: string }>;
+}
+
+function getEffectiveChatHistory(req: any): any[] {
+    return Array.isArray(req.compressed_chat_history) ? req.compressed_chat_history : (req.chat_history || []);
+}
+
+function isContinuationSignal(message?: string): boolean {
+    return typeof message === 'string' && message.trim() === '...';
+}
+
+function getCurrentMessageText(req: any): string {
+    const rawMessage = req.message || '';
+    if (!rawMessage || isContinuationSignal(rawMessage)) {
+        return '';
+    }
+    return state.currentConfig.omcEnabled ? processOMCMagicKeywords(rawMessage) : rawMessage;
+}
+
+function extractToolUses(nodes: any[] = []): NormalizedToolUse[] {
+    const toolUses: NormalizedToolUse[] = [];
+    for (const node of nodes) {
+        if (node.type !== 5 || !node.tool_use) continue;
+        const toolUse = node.tool_use;
+        const inputJson = toolUse.input_json || '{}';
+        let input: any = toolUse.input || {};
+        if (toolUse.input_json) {
+            try {
+                input = JSON.parse(toolUse.input_json);
+            } catch {
+                input = toolUse.input || {};
+            }
+        }
+        toolUses.push({
+            id: toolUse.tool_use_id || toolUse.id,
+            name: toolUse.tool_name || toolUse.name,
+            input,
+            inputJson,
+            thoughtSignature: toolUse.thought_signature
+        });
+    }
+    return toolUses;
+}
+
+function extractToolResults(nodes: any[] = []): NormalizedToolResult[] {
+    const toolResults: NormalizedToolResult[] = [];
+    for (const node of nodes) {
+        if (node.type !== 1 || !node.tool_result_node) continue;
+        const toolResult = node.tool_result_node;
+        toolResults.push({
+            id: toolResult.tool_use_id || toolResult.id,
+            name: toolResult.tool_name || 'unknown',
+            content: toolResult.content || ''
+        });
+    }
+    return toolResults;
+}
+
+function extractTextNodes(nodes: any[] = []): string[] {
+    return nodes
+        .filter((node: any) => node.type === 0 && node.text_node?.content)
+        .map((node: any) => node.text_node.content);
+}
+
+function extractImageParts(nodes: any[] = []): Array<{ mimeType: string; data: string }> {
+    const formatMap: Record<number, string> = { 1: 'image/png', 2: 'image/jpeg', 3: 'image/gif', 4: 'image/webp' };
+    return nodes
+        .filter((node: any) => node.type === 2 && node.image_node?.image_data)
+        .map((node: any) => ({
+            mimeType: formatMap[node.image_node.format] || 'image/png',
+            data: node.image_node.image_data
+        }));
+}
+
+function pushNormalizedTurn(turns: NormalizedTurn[], turn: NormalizedTurn | null) {
+    if (!turn) return;
+    const hasText = !!turn.text?.trim();
+    const hasToolUses = !!turn.toolUses?.length;
+    const hasToolResults = !!turn.toolResults?.length;
+    const hasImages = !!turn.images?.length;
+    if (!hasText && !hasToolUses && !hasToolResults && !hasImages) return;
+    turns.push({
+        ...turn,
+        text: hasText ? turn.text!.trim() : undefined
+    });
+}
+
+export function normalizeAugmentTimeline(req: any): NormalizedTurn[] {
+    const turns: NormalizedTurn[] = [];
+    const chatHistory = getEffectiveChatHistory(req);
+
+    for (const exchange of chatHistory) {
+        pushNormalizedTurn(turns, {
+            role: 'user',
+            text: exchange.request_message || '',
+            toolResults: extractToolResults(exchange.request_nodes || [])
+        });
+
+        const responseText = [
+            extractTextNodes(exchange.response_nodes || []).join(''),
+            exchange.response_text || exchange.response_message || ''
+        ].find((content) => !!content) || '';
+
+        pushNormalizedTurn(turns, {
+            role: 'assistant',
+            text: responseText,
+            toolUses: extractToolUses(exchange.response_nodes || [])
+        });
+    }
+
+    const currentMessage = getCurrentMessageText(req);
+    const currentTextNodes = extractTextNodes(req.nodes || []).filter((content) => content !== currentMessage);
+    pushNormalizedTurn(turns, {
+        role: 'user',
+        text: [...currentTextNodes, currentMessage].filter(Boolean).join('\n\n'),
+        toolResults: extractToolResults(req.nodes || []),
+        images: extractImageParts(req.nodes || [])
+    });
+
+    return turns;
+}
+
 // ===== 将 Augment 请求转换为 Anthropic messages 格式 =====
 export function augmentToAnthropicMessages(req: any) {
     const messages: any[] = [];
+    const chatHistory = getEffectiveChatHistory(req);
     // Anthropic API 要求每个 tool_use 后必须紧跟对应的 tool_result
     // Augment 结构：exchange[i].response_nodes → tool_use, exchange[i+1].request_nodes → tool_result
-    for (let i = 0; i < (req.chat_history || []).length; i++) {
-        const exchange = req.chat_history[i];
-        const nextExchange = req.chat_history[i + 1];
+    for (let i = 0; i < chatHistory.length; i++) {
+        const exchange = chatHistory[i];
+        const nextExchange = chatHistory[i + 1];
         if (i === 0) {
             log(`[DEBUG] chat_history[0] keys: ${Object.keys(exchange).join(',')}`);
         }
@@ -309,8 +451,7 @@ export function augmentToAnthropicMessages(req: any) {
     }
     // 处理 nodes（文件内容、工具结果、图片）
     const imageNodes: any[] = [];
-    const rawMessage = req.message || '';
-    const currentMessage = state.currentConfig.omcEnabled ? processOMCMagicKeywords(rawMessage) : rawMessage;
+    const currentMessage = getCurrentMessageText(req);
     const toolResults: any[] = [];
     for (const node of req.nodes || []) {
         const nodeType = node.type;
@@ -429,226 +570,115 @@ export function augmentToAnthropicMessages(req: any) {
 // ===== 将 Augment 请求转换为 OpenAI 格式消息 =====
 export function augmentToOpenAIMessages(req: any) {
     const messages: any[] = [];
-    const conversationId = req.conversation_id || '';
-    const rawMessage = req.message || '';
-    const currentMessage = state.currentConfig.omcEnabled ? processOMCMagicKeywords(rawMessage) : rawMessage;
-    const historyLength = (req.chat_history || []).length;
-
-    // 保存原始用户消息（仅当新对话开始时）
-    if (historyLength === 0 && currentMessage && currentMessage !== '...') {
-        state.conversationUserMessages.set(conversationId, currentMessage);
-        log(`[DEBUG] OpenAI: Saved original user message for conversation ${conversationId}: "${currentMessage.substring(0, 50)}..."`);
-    }
-    const savedUserMessage = state.conversationUserMessages.get(conversationId) || '';
-
-    // 构建 tool_use_id → tool_result 的映射
-    const toolResultMap = new Map<string, any>();
-    if (req.chat_history) {
-        for (const exchange of req.chat_history) {
-            for (const node of exchange.request_nodes || []) {
-                if (node.type === 1 && node.tool_result_node) {
-                    const tr = node.tool_result_node;
-                    toolResultMap.set(tr.tool_use_id || tr.id, tr);
-                }
-            }
-        }
-    }
-    for (const node of req.nodes || []) {
-        if (node.type === 1 && node.tool_result_node) {
-            const tr = node.tool_result_node;
-            toolResultMap.set(tr.tool_use_id || tr.id, tr);
-        }
-    }
-    log(`[DEBUG] OpenAI: Built tool result map with ${toolResultMap.size} entries`);
-
-    // 处理聊天历史
-    if (req.chat_history) {
-        for (let i = 0; i < req.chat_history.length; i++) {
-            const exchange = req.chat_history[i];
-            let userContent = exchange.request_message || '';
-            const responseNodes = exchange.response_nodes || [];
-            const hasResponse = responseNodes.length > 0 || exchange.response_text || exchange.response_message;
-
-            if (!userContent && hasResponse && messages.length === 0) {
-                if (savedUserMessage) {
-                    userContent = savedUserMessage;
-                    log(`[DEBUG] OpenAI: Using cached user message for first exchange: "${savedUserMessage.substring(0, 50)}..."`);
-                } else {
-                    userContent = '...';
-                    log(`[DEBUG] OpenAI: No cached message found, inserted placeholder for first exchange`);
-                }
-            }
-            if (userContent) {
-                messages.push({ role: 'user', content: userContent });
-            }
-            const toolCalls: any[] = [];
-            let textContent = '';
-            for (const node of responseNodes) {
-                if (node.type === 5 && node.tool_use) {
-                    const tu = node.tool_use;
-                    toolCalls.push({
-                        id: tu.tool_use_id || tu.id,
+    for (const turn of normalizeAugmentTimeline(req)) {
+        if (turn.role === 'assistant') {
+            if (turn.toolUses && turn.toolUses.length > 0) {
+                const assistantMessage: any = {
+                    role: 'assistant',
+                    tool_calls: turn.toolUses.map((toolUse) => ({
+                        id: toolUse.id,
                         type: 'function',
-                        function: { name: tu.tool_name || tu.name, arguments: tu.input_json || '{}' }
-                    });
-                } else if (node.type === 0 && node.text_node) {
-                    textContent += node.text_node.content || '';
+                        function: { name: toolUse.name, arguments: toolUse.inputJson }
+                    }))
+                };
+                if (turn.text) {
+                    assistantMessage.content = turn.text;
                 }
+                messages.push(assistantMessage);
+                continue;
             }
-            if (toolCalls.length > 0) {
-                const assistantMsg: any = { role: 'assistant', tool_calls: toolCalls };
-                if (textContent) assistantMsg.content = textContent;
-                messages.push(assistantMsg);
-                for (const tc of toolCalls) {
-                    const tr = toolResultMap.get(tc.id);
-                    if (tr) {
-                        messages.push({ role: 'tool', tool_call_id: tc.id, content: tr.content || '' });
-                        toolResultMap.delete(tc.id);
-                    }
-                }
-            } else {
-                const response = exchange.response_text || exchange.response_message || '';
-                if (response) {
-                    messages.push({ role: 'assistant', content: response });
-                }
+
+            if (turn.text) {
+                messages.push({ role: 'assistant', content: turn.text });
             }
+            continue;
+        }
+
+        for (const toolResult of turn.toolResults || []) {
+            messages.push({
+                role: 'tool',
+                tool_call_id: toolResult.id,
+                content: toolResult.content || ''
+            });
+        }
+
+        if (turn.text) {
+            messages.push({ role: 'user', content: turn.text });
         }
     }
-    // 剩余未匹配的 tool_result
-    for (const [id, tr] of toolResultMap) {
-        messages.push({ role: 'tool', tool_call_id: id, content: tr.content || '' });
+
+    if (messages.length === 0) {
+        messages.push({ role: 'user', content: 'Hello' });
     }
-    // 添加当前用户消息
-    if (currentMessage && currentMessage !== '...') {
-        messages.push({ role: 'user', content: currentMessage });
-    }
+
     return messages;
 }
 
 // ===== 转换 Augment 消息到 Gemini 格式 =====
 export function augmentToGeminiMessages(req: any): any[] {
     const messages: any[] = [];
-    if (req.chat_history) {
-        for (let i = 0; i < req.chat_history.length; i++) {
-            const exchange = req.chat_history[i];
-            const responseNodes = exchange.response_nodes || [];
-            if (responseNodes.length === 0) {
-                log(`[GOOGLE] Skipping empty exchange ${i} (no response_nodes)`);
-                continue;
-            }
-            // 1. 用户消息
-            if (exchange.request_message) {
-                messages.push({ role: 'user', parts: [{ text: exchange.request_message }] });
-            } else if (i === 0) {
-                messages.push({ role: 'user', parts: [{ text: 'Continue with the previous request.' }] });
-                log(`[GOOGLE] Exchange ${i} user: [placeholder for missing request_message]`);
-            }
-            // 2. 模型响应
+    const pushGeminiMessage = (role: 'user' | 'model', parts: any[]) => {
+        if (parts.length === 0) return;
+        if (role === 'model' && messages.length === 0) {
+            log(`[GOOGLE] Skipping leading model turn without a preceding user turn`);
+            return;
+        }
+        const previous = messages[messages.length - 1];
+        if (previous && previous.role === role) {
+            previous.parts.push(...parts);
+            return;
+        }
+        messages.push({ role, parts });
+    };
+
+    for (const turn of normalizeAugmentTimeline(req)) {
+        if (turn.role === 'assistant') {
             const modelParts: any[] = [];
-            for (const node of responseNodes) {
-                if (node.type === 0 && node.text_node) {
-                    modelParts.push({ text: node.text_node.content });
-                } else if (node.type === 5 && node.tool_use) {
-                    const tu = node.tool_use;
-                    const functionCall: any = { name: tu.tool_name || tu.name, args: JSON.parse(tu.input_json || '{}') };
-                    const part: any = { functionCall };
-                    if (tu.thought_signature) { part.thoughtSignature = tu.thought_signature; }
-                    modelParts.push(part);
-                }
+            if (turn.text) {
+                modelParts.push({ text: turn.text });
             }
-            if (modelParts.length > 0) {
-                messages.push({ role: 'model', parts: modelParts });
-            }
-            // 3. 工具结果
-            const requestNodes = exchange.request_nodes || [];
-            const toolResults: any[] = [];
-            for (const node of requestNodes) {
-                if (node.type === 1 && node.tool_result_node) {
-                    const tr = node.tool_result_node;
-                    toolResults.push({ functionResponse: { name: tr.tool_name || 'unknown', response: { result: tr.content || '' } } });
+            for (const toolUse of turn.toolUses || []) {
+                const part: any = { functionCall: { name: toolUse.name, args: toolUse.input } };
+                if (toolUse.thoughtSignature) {
+                    part.thoughtSignature = toolUse.thoughtSignature;
                 }
+                modelParts.push(part);
             }
-            if (toolResults.length > 0) {
-                let nextExchange = null;
-                let skipCount = 0;
-                for (let j = i + 1; j < req.chat_history.length; j++) {
-                    const candidate = req.chat_history[j];
-                    if (candidate.response_nodes && candidate.response_nodes.length > 0) {
-                        nextExchange = candidate;
-                        skipCount = j - i;
-                        break;
-                    }
-                }
-                const userParts: any[] = [...toolResults];
-                if (nextExchange && nextExchange.request_message) {
-                    userParts.push({ text: nextExchange.request_message });
-                    messages.push({ role: 'user', parts: userParts });
-                    const nextResponseNodes = nextExchange.response_nodes || [];
-                    if (nextResponseNodes.length > 0) {
-                        const nextModelParts: any[] = [];
-                        for (const node of nextResponseNodes) {
-                            if (node.type === 0 && node.text_node) {
-                                nextModelParts.push({ text: node.text_node.content });
-                            } else if (node.type === 5 && node.tool_use) {
-                                const tu = node.tool_use;
-                                const functionCall: any = { name: tu.tool_name || tu.name, args: JSON.parse(tu.input_json || '{}') };
-                                const part: any = { functionCall };
-                                if (tu.thought_signature) { part.thoughtSignature = tu.thought_signature; }
-                                nextModelParts.push(part);
-                            }
-                        }
-                        if (nextModelParts.length > 0) {
-                            messages.push({ role: 'model', parts: nextModelParts });
-                        }
-                    }
-                    i += skipCount;
-                } else {
-                    log(`[GOOGLE] Tool results without next exchange, will be added to current request`);
-                }
-            }
+            pushGeminiMessage('model', modelParts);
+            continue;
         }
-    }
-    // 当前请求的工具结果和消息
-    const currentUserParts: any[] = [];
-    for (const node of req.nodes || []) {
-        if (node.type === 1 && node.tool_result_node) {
-            const tr = node.tool_result_node;
-            currentUserParts.push({ functionResponse: { name: tr.tool_name || 'unknown', response: { result: tr.content || '' } } });
+
+        const userParts: any[] = [];
+        for (const toolResult of turn.toolResults || []) {
+            userParts.push({
+                functionResponse: {
+                    name: toolResult.name || 'unknown',
+                    response: { result: toolResult.content || '' }
+                }
+            });
         }
-    }
-    if (req.message && req.message !== '...') {
-        const geminiMsg = state.currentConfig.omcEnabled ? processOMCMagicKeywords(req.message) : req.message;
-        currentUserParts.push({ text: geminiMsg });
-        for (const node of req.nodes || []) {
-            if (node.type === 2 && node.image_node) {
-                const imageNode = node.image_node;
-                const formatMap: any = { 1: 'image/png', 2: 'image/jpeg', 3: 'image/gif', 4: 'image/webp' };
-                currentUserParts.push({ inlineData: { mimeType: formatMap[imageNode.format] || 'image/png', data: imageNode.image_data } });
-            }
+        if (turn.text) {
+            userParts.push({ text: turn.text });
         }
+        for (const image of turn.images || []) {
+            userParts.push({ inlineData: { mimeType: image.mimeType, data: image.data } });
+        }
+        pushGeminiMessage('user', userParts);
     }
-    if (currentUserParts.length > 0) {
-        messages.push({ role: 'user', parts: currentUserParts });
-    }
-    // 确保至少有一条消息，且必须以 user 开头
+
     if (messages.length === 0) {
         log(`[GOOGLE] WARNING: No messages generated, adding placeholder`);
-        messages.push({ role: 'user', parts: [{ text: 'Please continue with the task.' }] });
+        messages.push({ role: 'user', parts: [{ text: 'Hello' }] });
     } else if (messages[0].role !== 'user') {
-        log(`[GOOGLE] WARNING: First message is not user, prepending placeholder`);
-        messages.unshift({ role: 'user', parts: [{ text: 'Continue with the previous request.' }] });
-    }
-    // 验证消息序列
-    for (let i = 0; i < messages.length - 1; i++) {
-        if (messages[i].role === messages[i + 1].role) {
-            log(`[GOOGLE] ERROR: Consecutive ${messages[i].role} messages at index ${i} and ${i + 1}`);
-            if (messages[i].role === 'user') {
-                messages[i].parts = [...messages[i].parts, ...messages[i + 1].parts];
-                messages.splice(i + 1, 1);
-                i--;
-            }
+        log(`[GOOGLE] WARNING: First compiled turn is not user, dropping it to satisfy Gemini ordering`);
+        while (messages.length > 0 && messages[0].role !== 'user') {
+            messages.shift();
+        }
+        if (messages.length === 0) {
+            messages.push({ role: 'user', parts: [{ text: 'Hello' }] });
         }
     }
+
     log(`[GOOGLE] Final message sequence: ${messages.map((m: any) => m.role).join(' → ')}`);
     return messages;
 }

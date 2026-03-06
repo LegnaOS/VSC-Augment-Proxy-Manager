@@ -614,11 +614,8 @@ export function convertToolDefinitions(toolDefs: any[]): any[] | undefined {
             });
         }
     }
-    // 注入任务列表工具 schema
-    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
-        tools.push({ name, description: def.description, input_schema: def.parameters });
-    }
-    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (Anthropic)`);
+    // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
+    // 不注入到 tools schema，避免某些 API 不兼容
     return tools.length > 0 ? tools : undefined;
 }
 export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefined {
@@ -695,11 +692,8 @@ export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefin
             });
         }
     }
-    // 注入任务列表工具 schema
-    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
-        tools.push({ type: 'function', function: { name, description: def.description, parameters: def.parameters } });
-    }
-    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (OpenAI)`);
+    // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
+    // 不注入到 tools schema，避免某些 API 不兼容
     return tools.length > 0 ? tools : undefined;
 }
 
@@ -728,11 +722,8 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
             parameters: parameters || { type: 'object', properties: {} }
         });
     }
-    // 注入任务列表工具 schema
-    for (const [name, def] of Object.entries(TASKLIST_TOOL_DEFS)) {
-        tools.push({ name, description: def.description, parameters: def.parameters });
-    }
-    log(`[TOOLS] Injected ${Object.keys(TASKLIST_TOOL_DEFS).length} tasklist tools (Gemini)`);
+    // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
+    // 不注入到 tools schema，避免某些 API 不兼容
     return tools;
 }
 // Augment 插件标记 str-replace-editor 为不支持的工具（unsupportedSidecarTools）
