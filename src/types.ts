@@ -17,6 +17,8 @@ export interface CodeSnippet {
     score: number;
 }
 
+export type OpenAIWireApi = 'chat.completions' | 'responses';
+
 export interface OpenAIRequestResult {
     text: string;
     toolCalls: Array<{
@@ -26,6 +28,7 @@ export interface OpenAIRequestResult {
     }>;
     finishReason: string | null;
     thinkingContent: string;
+    responseId?: string;
 }
 
 export interface CurrentConfig {
@@ -37,6 +40,7 @@ export interface CurrentConfig {
     enableCache: boolean;
     enableInterleavedThinking: boolean;
     enableThinking: boolean;
+    wireApi: OpenAIWireApi;
     // OMC (oh-my-claudecode) 配置
     omcEnabled: boolean;
     omcMode: string;

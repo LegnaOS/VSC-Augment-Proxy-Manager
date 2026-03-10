@@ -91,6 +91,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         if (config.provider && config.baseUrl !== undefined) await vscodeConfig.update(`${config.provider}.baseUrl`, config.baseUrl, vscode.ConfigurationTarget.Global);
         if (config.provider && config.model !== undefined) await vscodeConfig.update(`${config.provider}.model`, config.model, vscode.ConfigurationTarget.Global);
         if (config.provider === 'custom' && config.format) await vscodeConfig.update('custom.format', config.format, vscode.ConfigurationTarget.Global);
+        if (config.provider === 'custom' && config.wireApi) await vscodeConfig.update('custom.wireApi', config.wireApi, vscode.ConfigurationTarget.Global);
         // 保存 thinking 设置
         if (config.provider && config.enableThinking !== undefined) {
             await vscodeConfig.update(`${config.provider}.enableThinking`, config.enableThinking, vscode.ConfigurationTarget.Global);
@@ -135,6 +136,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
             };
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
+        configData.providers['custom'].wireApi = config.get('custom.wireApi', 'chat.completions');
         configData.compressionThreshold = config.get('compressionThreshold', 80);
         // Embedding 配置
         configData.embedding = {
@@ -320,6 +322,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <div class="row" id="formatRow" style="display:none"><label>API 格式 (自定义)</label>
             <select id="format"><option value="anthropic">Anthropic 格式</option><option value="openai">OpenAI 格式</option></select>
         </div>
+        <div class="row" id="wireApiRow" style="display:none"><label>OpenAI Wire API</label>
+            <select id="wireApi"><option value="chat.completions">chat.completions</option><option value="responses">responses</option></select>
+        </div>
         <div class="checkbox-row">
             <input type="checkbox" id="enableThinking">
             <label for="enableThinking">启用 Thinking (思考模式)</label>
@@ -438,17 +443,29 @@ const $refreshModelsBtn = document.getElementById('refreshModelsBtn');
 const $modelInfo = document.getElementById('modelInfo');
 const $format = document.getElementById('format');
 const $formatRow = document.getElementById('formatRow');
+const $wireApi = document.getElementById('wireApi');
+const $wireApiRow = document.getElementById('wireApiRow');
 const $port = document.getElementById('port');
 const $keyStatus = document.getElementById('keyStatus');
 const $enableThinking = document.getElementById('enableThinking');
+
+function updateCustomProviderUI() {
+    const isCustom = $provider.value === 'custom';
+    const isOpenAIFormat = isCustom && $format.value === 'openai';
+    $formatRow.style.display = isCustom ? 'block' : 'none';
+    $wireApiRow.style.display = isOpenAIFormat ? 'block' : 'none';
+}
 
 $provider.onchange = () => {
     const p = $provider.value;
     const pConfig = currentConfig.providers?.[p] || {};
     $baseUrl.value = pConfig.baseUrl || '';
     $model.value = pConfig.model || '';
-    $formatRow.style.display = p === 'custom' ? 'block' : 'none';
-    if (p === 'custom') $format.value = pConfig.format || 'anthropic';
+    if (p === 'custom') {
+        $format.value = pConfig.format || 'anthropic';
+        $wireApi.value = pConfig.wireApi || 'chat.completions';
+    }
+    updateCustomProviderUI();
     $enableThinking.checked = pConfig.enableThinking || false;
     updateKeyStatus(pConfig.hasApiKey);
     $apiKey.value = '';
@@ -456,6 +473,7 @@ $provider.onchange = () => {
     availableModels = [];
     $modelInfo.textContent = '';
 };
+$format.onchange = () => updateCustomProviderUI();
 $refreshModelsBtn.onclick = () => {
     const provider = $provider.value;
     $modelInfo.textContent = '正在获取模型列表...';
@@ -482,6 +500,7 @@ document.getElementById('saveConfigBtn').onclick = () => {
         model: $model.value,
         port: $port.value,
         format: $format.value,
+        wireApi: $wireApi.value,
         enableThinking: $enableThinking.checked
     } });
 };
@@ -643,8 +662,11 @@ window.addEventListener('message', e => {
         currentConfig = msg.config; $provider.value = msg.config.provider; $port.value = msg.config.port;
         const pConfig = msg.config.providers?.[msg.config.provider] || {};
         $baseUrl.value = pConfig.baseUrl || ''; $model.value = pConfig.model || '';
-        $formatRow.style.display = msg.config.provider === 'custom' ? 'block' : 'none';
-        if (msg.config.provider === 'custom') $format.value = pConfig.format || 'anthropic';
+        if (msg.config.provider === 'custom') {
+            $format.value = pConfig.format || 'anthropic';
+            $wireApi.value = pConfig.wireApi || 'chat.completions';
+        }
+        updateCustomProviderUI();
         $enableThinking.checked = pConfig.enableThinking || false;
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);

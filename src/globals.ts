@@ -76,6 +76,7 @@ export const state = {
         enableCache: true,
         enableInterleavedThinking: true,
         enableThinking: true,
+        wireApi: 'chat.completions',
         omcEnabled: false,
         omcMode: 'team',
         omcContinuationEnforcement: true,

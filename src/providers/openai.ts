@@ -4,7 +4,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
 import { state, log } from '../globals';
-import { OpenAIRequestResult } from '../types';
+import { OpenAIRequestResult, OpenAIWireApi } from '../types';
 import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError, splitReasoningContentFromText } from '../messages';
 import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
@@ -113,6 +113,278 @@ function normalizeKimiMessages(messages: any[]): any[] {
     return normalizedMessages;
 }
 
+function getOpenAIWireApi(): OpenAIWireApi {
+    if (state.currentConfig.provider === 'custom') {
+        return state.currentConfig.wireApi || 'chat.completions';
+    }
+    return 'chat.completions';
+}
+
+function resolveOpenAIEndpoint(baseUrl: string, wireApi: OpenAIWireApi): string {
+    const trimmedBaseUrl = (baseUrl || '').trim();
+    if (!trimmedBaseUrl) {
+        return trimmedBaseUrl;
+    }
+
+    const targetSuffix = wireApi === 'responses' ? '/responses' : '/chat/completions';
+    const url = new URL(trimmedBaseUrl);
+    const pathname = url.pathname.replace(/\/+$/, '');
+
+    if (pathname.endsWith('/chat/completions') || pathname.endsWith('/responses')) {
+        return url.toString();
+    }
+
+    if (!pathname || pathname === '/') {
+        url.pathname = `/v1${targetSuffix}`;
+        return url.toString();
+    }
+
+    if (pathname.endsWith('/v1')) {
+        url.pathname = `${pathname}${targetSuffix}`;
+        return url.toString();
+    }
+
+    return url.toString();
+}
+
+function convertOpenAIToolsForResponses(tools?: any[]): any[] | undefined {
+    if (!tools || tools.length === 0) {
+        return undefined;
+    }
+
+    return tools.map((tool: any) => {
+        if (tool?.type === 'function' && tool.function) {
+            return {
+                type: 'function',
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters
+            };
+        }
+        return tool;
+    });
+}
+
+function buildResponsesMessageText(message: any): string {
+    const content = typeof message?.content === 'string' ? message.content : '';
+    const reasoningContent = typeof message?.reasoning_content === 'string' ? message.reasoning_content : '';
+
+    if (reasoningContent && content) {
+        return `<think>\n${reasoningContent}\n</think>\n\n${content}`;
+    }
+    if (reasoningContent) {
+        return `<think>\n${reasoningContent}\n</think>`;
+    }
+    return content;
+}
+
+function convertOpenAIMessagesToResponsesInput(messages: any[]): any[] {
+    const input: any[] = [];
+
+    for (const message of messages) {
+        if (!message || typeof message !== 'object' || message.role === 'system') {
+            continue;
+        }
+
+        if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            const assistantText = buildResponsesMessageText(message);
+            if (assistantText) {
+                input.push({
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'input_text', text: assistantText }]
+                });
+            }
+            for (const toolCall of message.tool_calls) {
+                input.push({
+                    type: 'function_call',
+                    call_id: toolCall?.id,
+                    name: toolCall?.function?.name || 'tool',
+                    arguments: typeof toolCall?.function?.arguments === 'string'
+                        ? toolCall.function.arguments
+                        : JSON.stringify(toolCall?.function?.arguments || {})
+                });
+            }
+            continue;
+        }
+
+        if (message.role === 'tool') {
+            input.push({
+                type: 'function_call_output',
+                call_id: message.tool_call_id,
+                output: typeof message.content === 'string'
+                    ? message.content
+                    : JSON.stringify(message.content || '')
+            });
+            continue;
+        }
+
+        input.push({
+            type: 'message',
+            role: message.role,
+            content: [{ type: 'input_text', text: buildResponsesMessageText(message) }]
+        });
+    }
+
+    if (input.length === 0) {
+        return [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '' }] }];
+    }
+
+    return input;
+}
+
+function buildOpenAIRequestBody(
+    messages: any[],
+    tools: any[] | undefined,
+    model: string,
+    responseFormat: any,
+    wireApi: OpenAIWireApi,
+    continuation?: { previousResponseId?: string; responseInputs?: any[] }
+): any {
+    if (wireApi === 'responses') {
+        const instructions = messages
+            .filter((message) => message?.role === 'system' && typeof message?.content === 'string' && message.content.trim())
+            .map((message) => message.content.trim())
+            .join('\n\n');
+
+        const requestBody: any = {
+            model,
+            stream: true,
+            input: continuation?.responseInputs?.length
+                ? continuation.responseInputs
+                : convertOpenAIMessagesToResponsesInput(messages),
+            max_output_tokens: 115000
+        };
+
+        if (instructions && !continuation?.previousResponseId) {
+            requestBody.instructions = instructions;
+        }
+        if (continuation?.previousResponseId) {
+            requestBody.previous_response_id = continuation.previousResponseId;
+        }
+
+        const responseTools = convertOpenAIToolsForResponses(tools);
+        if (responseTools && responseTools.length > 0) {
+            requestBody.tools = responseTools;
+            requestBody.parallel_tool_calls = true;
+        }
+
+        if (responseFormat) {
+            log('[JSON-MODE] response_format ignored for responses wire API');
+        }
+
+        return requestBody;
+    }
+
+    const requestBody: any = {
+        model: model,
+        max_tokens: 115000,
+        messages: messages,
+        stream: true
+    };
+
+    if (tools && tools.length > 0) {
+        requestBody.tools = tools;
+        requestBody.tool_choice = 'auto';
+    }
+
+    if (responseFormat) {
+        requestBody.response_format = responseFormat;
+        log(`[JSON-MODE] Enabled with format: ${JSON.stringify(responseFormat)}`);
+    }
+
+    return requestBody;
+}
+
+function consumeSSEMessages(buffer: string): { messages: Array<{ event?: string; data: string }>; rest: string } {
+    const normalizedBuffer = buffer.replace(/\r\n/g, '\n');
+    const blocks = normalizedBuffer.split('\n\n');
+    const rest = blocks.pop() || '';
+
+    const messages = blocks.map((block) => {
+        let eventName: string | undefined;
+        const dataLines: string[] = [];
+
+        for (const rawLine of block.split('\n')) {
+            const line = rawLine.trimEnd();
+            if (!line || line.startsWith(':')) {
+                continue;
+            }
+            if (line.startsWith('event:')) {
+                eventName = line.slice(6).trim();
+                continue;
+            }
+            if (line.startsWith('data:')) {
+                dataLines.push(line.slice(5).trimStart());
+            }
+        }
+
+        return { event: eventName, data: dataLines.join('\n').trim() };
+    }).filter((message) => !!message.data);
+
+    return { messages, rest };
+}
+
+function openThinking(result: OpenAIRequestResult, onTextDelta: ((delta: string) => void) | undefined, stateRef: { inThinking: boolean }) {
+    if (stateRef.inThinking) {
+        return;
+    }
+    stateRef.inThinking = true;
+    result.text += '<think>\n';
+    if (onTextDelta) onTextDelta('<think>\n');
+}
+
+function closeThinking(result: OpenAIRequestResult, onTextDelta: ((delta: string) => void) | undefined, stateRef: { inThinking: boolean }) {
+    if (!stateRef.inThinking) {
+        return;
+    }
+    stateRef.inThinking = false;
+    result.text += '\n</think>\n\n';
+    if (onTextDelta) onTextDelta('\n</think>\n\n');
+}
+
+function extractTextFromCompletedResponse(response: any): string {
+    if (typeof response?.output_text === 'string' && response.output_text) {
+        return response.output_text;
+    }
+
+    const textParts: string[] = [];
+    for (const item of response?.output || []) {
+        if (item?.type !== 'message' || !Array.isArray(item.content)) {
+            continue;
+        }
+        for (const contentItem of item.content) {
+            if ((contentItem?.type === 'output_text' || contentItem?.type === 'text') && typeof contentItem?.text === 'string') {
+                textParts.push(contentItem.text);
+            }
+        }
+    }
+    return textParts.join('');
+}
+
+function mergeResponsesToolCalls(
+    response: any,
+    partialToolCalls: Map<string, { id: string; name: string; arguments: string }>
+): Array<{ id: string; name: string; arguments: string }> {
+    const toolCalls = new Map(partialToolCalls);
+
+    for (const item of response?.output || []) {
+        if (item?.type !== 'function_call') {
+            continue;
+        }
+        const key = item.call_id || item.id || `${item.name || 'tool'}_${toolCalls.size}`;
+        toolCalls.set(key, {
+            id: item.call_id || item.id || key,
+            name: item.name || 'tool',
+            arguments: typeof item.arguments === 'string'
+                ? item.arguments
+                : JSON.stringify(item.arguments || {})
+        });
+    }
+
+    return Array.from(toolCalls.values());
+}
+
 // ========== 执行单次 OpenAI API 请求（真流式） ==========
 // onTextDelta: 文本增量到达时立即回调，实现真正的流式输出
 export async function executeOpenAIRequest(
@@ -122,37 +394,27 @@ export async function executeOpenAIRequest(
     apiKey: string,
     model: string,
     onTextDelta?: (delta: string) => void,
-    responseFormat?: any  // ✅ 新增：支持 JSON Mode
+    responseFormat?: any,
+    continuation?: { previousResponseId?: string; responseInputs?: any[] }
 ): Promise<OpenAIRequestResult> {
     return new Promise((resolve, reject) => {
-        const requestBody: any = {
-            model: model,
-            max_tokens: 115000,
-            messages: messages,
-            stream: true
-        };
-        if (tools && tools.length > 0) {
-            requestBody.tools = tools;
-            requestBody.tool_choice = 'auto';
-        }
-        // ✅ 新增：支持 JSON Mode
-        if (responseFormat) {
-            requestBody.response_format = responseFormat;
-            log(`[JSON-MODE] Enabled with format: ${JSON.stringify(responseFormat)}`);
-        }
-        // ✅ Kimi Coding Plan 需要 prompt_cache_key
+        const wireApi = getOpenAIWireApi();
+        const resolvedEndpoint = resolveOpenAIEndpoint(apiEndpoint, wireApi);
+        const requestBody = buildOpenAIRequestBody(messages, tools, model, responseFormat, wireApi, continuation);
+
         if (state.currentConfig.provider === 'kimi-coding') {
             requestBody.prompt_cache_key = `session-${Date.now()}`;
             log(`[KIMI-CODING] Added prompt_cache_key: ${requestBody.prompt_cache_key}`);
         }
+
         const apiBody = JSON.stringify(requestBody);
-        const url = new URL(apiEndpoint);
+        const url = new URL(resolvedEndpoint);
         const headers: any = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Length': Buffer.byteLength(apiBody)
         };
 
-        // Kimi Coding Plan 需要伪装成 Kimi CLI
         if (state.currentConfig.provider === 'kimi-coding') {
             headers['User-Agent'] = 'KimiCLI/0.77';
         }
@@ -160,15 +422,17 @@ export async function executeOpenAIRequest(
         const options = {
             hostname: url.hostname,
             port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: url.pathname,
+            path: `${url.pathname}${url.search}`,
             method: 'POST',
             headers
         };
-        log(`[API-EXEC] Sending request to ${apiEndpoint}, messages=${messages.length}`);
+
+        log(`[API-EXEC] Sending request to ${resolvedEndpoint}, wireApi=${wireApi}, messages=${messages.length}`);
         const result: OpenAIRequestResult = { text: '', toolCalls: [], finishReason: null, thinkingContent: '' };
         let buffer = '';
-        let inThinking = false;
+        const thinkingState = { inThinking: false };
         const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
+        const responsesToolCallsMap = new Map<string, { id: string; name: string; arguments: string }>();
 
         const httpModule = url.protocol === 'https:' ? https : http;
         const apiReq = httpModule.request(options, (apiRes: any) => {
@@ -183,94 +447,177 @@ export async function executeOpenAIRequest(
             }
             apiRes.on('data', (chunk: any) => {
                 const chunkStr = chunk.toString();
-                // 🔍 调试：打印原始 chunk
                 if (state.currentConfig.provider === 'kimi-coding') {
                     log(`[KIMI-CODING-RAW] Chunk: ${chunkStr.slice(0, 200)}`);
                 }
+
                 buffer += chunkStr;
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6).trim();
-                        if (!data || data === '[DONE]') continue;
-                        try {
-                            const event = JSON.parse(data);
-                            // 🔍 调试：打印原始事件
+                const consumed = consumeSSEMessages(buffer);
+                buffer = consumed.rest;
+
+                for (const message of consumed.messages) {
+                    const data = message.data;
+                    if (!data || data === '[DONE]') continue;
+
+                    try {
+                        const event = JSON.parse(data);
+                        const eventType = message.event || event.type;
+
+                        if (state.currentConfig.provider === 'kimi-coding') {
+                            log(`[KIMI-CODING-DEBUG] Event: ${JSON.stringify(event).slice(0, 500)}`);
+                        }
+
+                        if (wireApi === 'responses') {
+                            if (event.response?.id && !result.responseId) {
+                                result.responseId = event.response.id;
+                            }
+
+                            if (typeof eventType === 'string' && eventType.includes('reasoning') && typeof event.delta === 'string' && event.delta) {
+                                openThinking(result, onTextDelta, thinkingState);
+                                result.text += event.delta;
+                                result.thinkingContent += event.delta;
+                                if (onTextDelta) onTextDelta(event.delta);
+                                continue;
+                            }
+
+                            if (eventType === 'response.output_text.delta') {
+                                closeThinking(result, onTextDelta, thinkingState);
+                                if (typeof event.delta === 'string' && event.delta) {
+                                    result.text += event.delta;
+                                    if (onTextDelta) onTextDelta(event.delta);
+                                }
+                                continue;
+                            }
+
+                            if ((eventType === 'response.output_item.added' || eventType === 'response.output_item.done') && event.item?.type === 'function_call') {
+                                const key = event.item.call_id || event.item.id || `${responsesToolCallsMap.size}`;
+                                responsesToolCallsMap.set(key, {
+                                    id: event.item.call_id || event.item.id || key,
+                                    name: event.item.name || responsesToolCallsMap.get(key)?.name || 'tool',
+                                    arguments: typeof event.item.arguments === 'string'
+                                        ? event.item.arguments
+                                        : responsesToolCallsMap.get(key)?.arguments || ''
+                                });
+                                continue;
+                            }
+
+                            if (eventType === 'response.function_call_arguments.delta') {
+                                closeThinking(result, onTextDelta, thinkingState);
+                                const key = event.call_id || event.item_id || `${event.output_index ?? responsesToolCallsMap.size}`;
+                                const existing = responsesToolCallsMap.get(key) || {
+                                    id: event.call_id || key,
+                                    name: event.name || 'tool',
+                                    arguments: ''
+                                };
+                                existing.id = event.call_id || existing.id;
+                                if (event.name) existing.name = event.name;
+                                if (typeof event.delta === 'string') existing.arguments += event.delta;
+                                responsesToolCallsMap.set(key, existing);
+                                continue;
+                            }
+
+                            if (eventType === 'response.function_call_arguments.done') {
+                                const key = event.call_id || event.item_id || `${event.output_index ?? responsesToolCallsMap.size}`;
+                                const existing = responsesToolCallsMap.get(key) || {
+                                    id: event.call_id || key,
+                                    name: event.name || 'tool',
+                                    arguments: ''
+                                };
+                                existing.id = event.call_id || existing.id;
+                                if (event.name) existing.name = event.name;
+                                if (typeof event.arguments === 'string') existing.arguments = event.arguments;
+                                responsesToolCallsMap.set(key, existing);
+                                continue;
+                            }
+
+                            if (eventType === 'response.completed') {
+                                closeThinking(result, onTextDelta, thinkingState);
+                                result.responseId = event.response?.id || result.responseId;
+                                result.finishReason = event.response?.status || 'completed';
+                                const fallbackText = extractTextFromCompletedResponse(event.response);
+                                if (fallbackText && !result.text) {
+                                    result.text = fallbackText;
+                                    if (onTextDelta) onTextDelta(fallbackText);
+                                }
+                                result.toolCalls = mergeResponsesToolCalls(event.response, responsesToolCallsMap);
+                                continue;
+                            }
+
+                            if (eventType === 'error' || event.error) {
+                                reject(new Error(event.error?.message || event.message || 'Responses API stream error'));
+                                return;
+                            }
+
+                            continue;
+                        }
+
+                        const choice = event.choices?.[0];
+                        const delta = choice?.delta?.content || '';
+                        const reasoningDelta = choice?.delta?.reasoning_content || '';
+                        const toolCallsDelta = choice?.delta?.tool_calls;
+
+                        if (choice?.finish_reason) { result.finishReason = choice.finish_reason; }
+
+                        if (reasoningDelta) {
+                            openThinking(result, onTextDelta, thinkingState);
+                            result.text += reasoningDelta;
+                            result.thinkingContent += reasoningDelta;
+                            if (onTextDelta) onTextDelta(reasoningDelta);
+                        }
+
+                        if ('content' in (choice?.delta || {})) {
+                            closeThinking(result, onTextDelta, thinkingState);
+                            if (delta) {
+                                result.text += delta;
+                                if (onTextDelta) onTextDelta(delta);
+                            }
+                        }
+
+                        if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
+                            closeThinking(result, onTextDelta, thinkingState);
                             if (state.currentConfig.provider === 'kimi-coding') {
-                                log(`[KIMI-CODING-DEBUG] Event: ${JSON.stringify(event).slice(0, 500)}`);
+                                log(`[KIMI-CODING-TOOLS] Received ${toolCallsDelta.length} tool calls`);
                             }
-                            const choice = event.choices?.[0];
-                            const delta = choice?.delta?.content || '';
-                            const reasoningDelta = choice?.delta?.reasoning_content || '';
-                            const toolCallsDelta = choice?.delta?.tool_calls;
-                            if (choice?.finish_reason) { result.finishReason = choice.finish_reason; }
-                            if (reasoningDelta) {
-                                if (!inThinking) {
-                                    inThinking = true;
-                                    result.text += '<think>\n';
-                                    if (onTextDelta) onTextDelta('<think>\n');
+                            for (const tc of toolCallsDelta) {
+                                const idx = tc.index ?? 0;
+                                if (!toolCallsMap.has(idx)) {
+                                    toolCallsMap.set(idx, { id: tc.id || `tool_${idx}_${Date.now()}`, name: tc.function?.name || '', arguments: '' });
                                 }
-                                result.text += reasoningDelta;
-                                result.thinkingContent += reasoningDelta;
-                                if (onTextDelta) onTextDelta(reasoningDelta);
-                            }
-                            // 如果有 content（即使是空字符串），也要关闭 thinking
-                            if ('content' in (choice?.delta || {})) {
-                                if (inThinking) {
-                                    inThinking = false;
-                                    result.text += '\n</think>\n\n';
-                                    if (onTextDelta) onTextDelta('\n</think>\n\n');
-                                }
-                                if (delta) {  // 只有非空才添加
-                                    result.text += delta;
-                                    if (onTextDelta) onTextDelta(delta);
-                                }
-                            }
-                            if (toolCallsDelta && Array.isArray(toolCallsDelta)) {
-                                // 如果有 tool calls，也要关闭 thinking
-                                if (inThinking) {
-                                    inThinking = false;
-                                    result.text += '\n</think>\n\n';
-                                    if (onTextDelta) onTextDelta('\n</think>\n\n');
+                                const st = toolCallsMap.get(idx)!;
+                                if (tc.id) st.id = tc.id;
+                                if (tc.function?.name) st.name = tc.function.name;
+                                const argsValue = tc.function?.arguments || tc.function?.parameters || tc.arguments || tc.parameters;
+                                if (argsValue !== undefined && argsValue !== null) {
+                                    st.arguments += typeof argsValue === 'object' ? JSON.stringify(argsValue) : argsValue;
                                 }
                                 if (state.currentConfig.provider === 'kimi-coding') {
-                                    log(`[KIMI-CODING-TOOLS] Received ${toolCallsDelta.length} tool calls`);
-                                }
-                                for (const tc of toolCallsDelta) {
-                                    const idx = tc.index ?? 0;
-                                    if (!toolCallsMap.has(idx)) {
-                                        toolCallsMap.set(idx, { id: tc.id || `tool_${idx}_${Date.now()}`, name: tc.function?.name || '', arguments: '' });
-                                    }
-                                    const st = toolCallsMap.get(idx)!;
-                                    if (tc.id) st.id = tc.id;
-                                    if (tc.function?.name) st.name = tc.function.name;
-                                    const argsValue = tc.function?.arguments || tc.function?.parameters || tc.arguments || tc.parameters;
-                                    if (argsValue !== undefined && argsValue !== null) {
-                                        st.arguments += typeof argsValue === 'object' ? JSON.stringify(argsValue) : argsValue;
-                                    }
-                                    if (state.currentConfig.provider === 'kimi-coding') {
-                                        log(`[KIMI-CODING-TOOLS] Tool ${idx}: id=${st.id}, name=${st.name}, args=${st.arguments.length} chars`);
-                                    }
+                                    log(`[KIMI-CODING-TOOLS] Tool ${idx}: id=${st.id}, name=${st.name}, args=${st.arguments.length} chars`);
                                 }
                             }
-                        } catch (e) { }
-                    }
+                        }
+                    } catch (e) { }
                 }
             });
+
             apiRes.on('end', () => {
-                if (inThinking) {
-                    result.text += '\n</think>\n\n';
-                    if (onTextDelta) onTextDelta('\n</think>\n\n');
-                }
+                closeThinking(result, onTextDelta, thinkingState);
+
                 if (state.currentConfig.provider === 'kimi-coding') {
                     log(`[KIMI-CODING-MAP] toolCallsMap size: ${toolCallsMap.size}`);
                 }
-                for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
-                // 🔍 调试：打印最终结果
+
+                if (wireApi === 'responses') {
+                    if (result.toolCalls.length === 0 && responsesToolCallsMap.size > 0) {
+                        result.toolCalls = Array.from(responsesToolCallsMap.values());
+                    }
+                } else {
+                    for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
+                }
+
                 if (state.currentConfig.provider === 'kimi-coding') {
                     log(`[KIMI-CODING-RESULT] text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}, thinking=${result.thinkingContent.length}`);
                 }
+
                 log(`[API-EXEC] Complete: text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}`);
                 resolve(result);
             });
@@ -339,6 +686,7 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
     const convertedMessages = augmentToOpenAIMessages(augmentReq);
     openaiMessages.push(...convertedMessages);
 
+    const wireApi = getOpenAIWireApi();
     const apiEndpoint = state.currentConfig.baseUrl;
     const apiKey = state.currentConfig.apiKey;
     const model = state.currentConfig.model;
@@ -347,6 +695,8 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
     let iteration = 0;
     let currentMessages = [...openaiMessages];
     let accumulatedText = '';
+    let previousResponseId: string | undefined;
+    let pendingResponseInputs: any[] | undefined;
 
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
 
@@ -361,11 +711,22 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
         while (iteration < MAX_ITERATIONS) {
             iteration++;
             log(`[LOOP] Iteration ${iteration}/${MAX_ITERATIONS}`);
-            const requestMessages = normalizeKimiMessages(currentMessages);
+            const requestMessages = wireApi === 'chat.completions'
+                ? normalizeKimiMessages(currentMessages)
+                : currentMessages;
 
-            // 第一轮迭代使用流式回调，后续 RAG 循环也流式输出
-            // ✅ 新增：传递 responseFormat 参数
-            const result = await executeOpenAIRequest(requestMessages, tools, apiEndpoint, apiKey, model, onTextDelta, responseFormat);
+            const result = await executeOpenAIRequest(
+                requestMessages,
+                tools,
+                apiEndpoint,
+                apiKey,
+                model,
+                onTextDelta,
+                responseFormat,
+                wireApi === 'responses' ? { previousResponseId, responseInputs: pendingResponseInputs } : undefined
+            );
+
+            pendingResponseInputs = undefined;
             accumulatedText += result.text;
 
             // 只检查 toolCalls 是否为空，不检查 finishReason
@@ -413,6 +774,51 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                     res.write(JSON.stringify({ text: '', nodes: [], stop_reason: 3 }) + '\n');
                     res.end();
                     return;
+                }
+
+                if (wireApi === 'responses') {
+                    if (!result.responseId) {
+                        throw new Error('Responses API returned tool calls without response id');
+                    }
+
+                    const nextResponseInputs: any[] = [];
+
+                    for (const { tc, toolNode } of interceptedTools) {
+                        nextResponseInputs.push({
+                            type: 'function_call_output',
+                            call_id: tc.id,
+                            output: toolNode.tool_result_node.content
+                        });
+
+                        try {
+                            const resultObj = JSON.parse(toolNode.tool_result_node.content);
+                            const diffText = renderDiffText(resultObj, tc.name);
+                            res.write(JSON.stringify({ text: diffText, nodes: [], stop_reason: 0 }) + '\n');
+                        } catch {
+                            res.write(JSON.stringify({
+                                text: `\n✅ ${tc.name} executed\n`,
+                                nodes: [], stop_reason: 0
+                            }) + '\n');
+                        }
+                    }
+
+                    for (const cs of codebaseSearchCalls) {
+                        const searchResult = await executeRAGSearch(cs.query);
+                        nextResponseInputs.push({
+                            type: 'function_call_output',
+                            call_id: cs.id,
+                            output: searchResult
+                        });
+                        res.write(JSON.stringify({
+                            text: `\n📚 **代码库搜索** ("${cs.query.substring(0, 30)}...")\n`,
+                            nodes: [], stop_reason: 0
+                        }) + '\n');
+                    }
+
+                    previousResponseId = result.responseId;
+                    pendingResponseInputs = nextResponseInputs;
+                    log(`[LOOP] All ${interceptedTools.length} tools intercepted, feeding ${nextResponseInputs.length} outputs back via responses continuation`);
+                    continue;
                 }
 
                 // ✅ 所有工具都被拦截了 → 把结果送回 AI 继续生成
@@ -476,6 +882,32 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
 
             if (codebaseSearchCalls.length > 0) {
                 log(`[LOOP] Processing ${codebaseSearchCalls.length} codebase_search calls`);
+
+                if (wireApi === 'responses') {
+                    if (!result.responseId) {
+                        throw new Error('Responses API returned codebase_search calls without response id');
+                    }
+
+                    const nextResponseInputs: any[] = [];
+                    for (const cs of codebaseSearchCalls) {
+                        const searchResult = await executeRAGSearch(cs.query);
+                        nextResponseInputs.push({
+                            type: 'function_call_output',
+                            call_id: cs.id,
+                            output: searchResult
+                        });
+                        res.write(JSON.stringify({
+                            text: `\n\n🔍 **代码库搜索** (查询: "${cs.query}")\n${searchResult.split('\n').slice(0, 5).join('\n')}...\n\n`,
+                            nodes: [], stop_reason: 0
+                        }) + '\n');
+                    }
+
+                    previousResponseId = result.responseId;
+                    pendingResponseInputs = nextResponseInputs;
+                    log(`[LOOP] Added ${nextResponseInputs.length} responses tool outputs, continuing to next iteration`);
+                    continue;
+                }
+
                 const toolCallsForMsg = codebaseSearchCalls.map((cs: any) => ({
                     id: cs.id, type: 'function',
                     function: { name: 'codebase_search', arguments: JSON.stringify({ query: cs.query }) }

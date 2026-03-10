@@ -956,6 +956,9 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
     state.currentConfig.port = config.get('port', 8765);
     state.currentConfig.baseUrl = config.get(`${state.currentConfig.provider}.baseUrl`, DEFAULT_BASE_URLS[state.currentConfig.provider]);
     state.currentConfig.model = config.get(`${state.currentConfig.provider}.model`, DEFAULT_MODELS[state.currentConfig.provider]);
+    state.currentConfig.wireApi = state.currentConfig.provider === 'custom'
+        ? config.get('custom.wireApi', 'chat.completions')
+        : 'chat.completions';
     if (state.currentConfig.provider === 'minimax') { state.currentConfig.enableCache = config.get('minimax.enableCache', true); state.currentConfig.enableInterleavedThinking = config.get('minimax.enableInterleavedThinking', true); }
     if (state.currentConfig.provider === 'deepseek') { state.currentConfig.enableThinking = config.get('deepseek.enableThinking', true); }
     // OMC 配置初始化
@@ -1073,6 +1076,9 @@ export async function refreshConfig() {
     state.currentConfig.port = config.get('port', 8765);
     state.currentConfig.baseUrl = config.get(`${newProvider}.baseUrl`, DEFAULT_BASE_URLS[newProvider]);
     state.currentConfig.model = config.get(`${newProvider}.model`, DEFAULT_MODELS[newProvider]);
+    state.currentConfig.wireApi = newProvider === 'custom'
+        ? config.get('custom.wireApi', 'chat.completions')
+        : 'chat.completions';
     if (newProvider === 'minimax') {
         state.currentConfig.enableCache = config.get('minimax.enableCache', true);
         state.currentConfig.enableInterleavedThinking = config.get('minimax.enableInterleavedThinking', true);

@@ -2,7 +2,7 @@
   "name": "augment-proxy-manager",
   "displayName": "Augment Proxy Manager",
   "description": "管理 Augment API 代理服务器，支持自定义 API 端点和多种 AI 供应商",
-  "version": "3.3.5",
+  "version": "3.3.6",
   "publisher": "legna",
   "repository": {
     "type": "git",
@@ -242,6 +242,15 @@
             "anthropic",
             "openai"
           ]
+        },
+        "augmentProxy.custom.wireApi": {
+          "type": "string",
+          "default": "chat.completions",
+          "enum": [
+            "chat.completions",
+            "responses"
+          ],
+          "description": "自定义 OpenAI 兼容 API 的 wire protocol"
         },
         "augmentProxy.custom.enableThinking": {
           "type": "boolean",

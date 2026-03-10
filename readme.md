@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.3.5-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.3.6-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -164,6 +164,14 @@ src/
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
 ## 更新日志
+
+### v3.3.6 — OpenAI Responses 适配 + Custom Wire API
+
+- **OpenAI `responses` wire API** — custom OpenAI 兼容端点现在可显式选择 `chat.completions` 或 `responses`，修复 `wire_api = "responses"` 时请求发出但没有任何输出的问题
+- **endpoint normalization** — custom base URL 现在会按 wire protocol 自动补到 `/v1/chat/completions` 或 `/v1/responses`，减少用户手填 endpoint 的歧义
+- **responses SSE parser** — 新增对 `response.output_text.delta`、`response.function_call_arguments.*`、`response.completed` 等事件的解析，文本流与工具调用都能正确落地
+- **tool continuation** — `responses` 模式下改用 `previous_response_id + function_call_output` 续轮，不再错误复用 chat history 回放逻辑
+- **sidebar config** — 控制面板新增 `OpenAI Wire API` 下拉，仅在 `custom + openai` 时显示，避免污染其他 provider 的配置
 
 ### v3.3.5 — Kimi 工具链闭环 + 标准 API reasoning 修复
 
