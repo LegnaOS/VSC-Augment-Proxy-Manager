@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.3.6-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.3.7-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -164,6 +164,14 @@ src/
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
 ## 更新日志
+
+### v3.3.7 — OpenAI Provider Wire API 修正 + Responses 自动回退
+
+- **openai provider wireApi** — `wireApi` 不再只绑在 `custom` 上，`openai` provider 现在也能明确选择 `chat.completions` 或 `responses`
+- **endpoint suffix normalization** — 当 base URL 已经写成 `/chat/completions` 或 `/responses` 时，runtime 会按目标协议替换成正确后缀，不再死守错误 endpoint
+- **protocol inference** — 会从 base URL 自动推断 `responses/chat.completions`，减少配置和 runtime 不一致导致的误发请求
+- **legacy protocol fallback** — 上游如果返回 `Unsupported legacy protocol` / `Please use /v1/responses`，代理会自动切到 `responses` 重试一次
+- **sidebar config** — 控制面板现在会对 `openai` provider 展示并保存 `OpenAI Wire API`，不再只对 `custom + openai` 生效
 
 ### v3.3.6 — OpenAI Responses 适配 + Custom Wire API
 

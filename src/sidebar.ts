@@ -1,7 +1,7 @@
 // ===== 侧边栏 Provider =====
 import * as vscode from 'vscode';
 import { state, log } from './globals';
-import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS } from './config';
+import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS, getConfiguredOpenAIWireApi } from './config';
 import { startProxy, stopProxy } from './proxy';
 
 
@@ -92,6 +92,7 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
         if (config.provider && config.model !== undefined) await vscodeConfig.update(`${config.provider}.model`, config.model, vscode.ConfigurationTarget.Global);
         if (config.provider === 'custom' && config.format) await vscodeConfig.update('custom.format', config.format, vscode.ConfigurationTarget.Global);
         if (config.provider === 'custom' && config.wireApi) await vscodeConfig.update('custom.wireApi', config.wireApi, vscode.ConfigurationTarget.Global);
+        if (config.provider === 'openai' && config.wireApi) await vscodeConfig.update('openai.wireApi', config.wireApi, vscode.ConfigurationTarget.Global);
         // 保存 thinking 设置
         if (config.provider && config.enableThinking !== undefined) {
             await vscodeConfig.update(`${config.provider}.enableThinking`, config.enableThinking, vscode.ConfigurationTarget.Global);
@@ -136,7 +137,8 @@ export class AugmentProxySidebarProvider implements vscode.WebviewViewProvider {
             };
         }
         configData.providers['custom'].format = config.get('custom.format', 'anthropic');
-        configData.providers['custom'].wireApi = config.get('custom.wireApi', 'chat.completions');
+        configData.providers['openai'].wireApi = getConfiguredOpenAIWireApi('openai', config, configData.providers['openai'].baseUrl);
+        configData.providers['custom'].wireApi = getConfiguredOpenAIWireApi('custom', config, configData.providers['custom'].baseUrl);
         configData.compressionThreshold = config.get('compressionThreshold', 80);
         // Embedding 配置
         configData.embedding = {
@@ -449,11 +451,11 @@ const $port = document.getElementById('port');
 const $keyStatus = document.getElementById('keyStatus');
 const $enableThinking = document.getElementById('enableThinking');
 
-function updateCustomProviderUI() {
+function updateProviderUI() {
     const isCustom = $provider.value === 'custom';
-    const isOpenAIFormat = isCustom && $format.value === 'openai';
+    const shouldShowWireApi = $provider.value === 'openai' || (isCustom && $format.value === 'openai');
     $formatRow.style.display = isCustom ? 'block' : 'none';
-    $wireApiRow.style.display = isOpenAIFormat ? 'block' : 'none';
+    $wireApiRow.style.display = shouldShowWireApi ? 'block' : 'none';
 }
 
 $provider.onchange = () => {
@@ -463,9 +465,9 @@ $provider.onchange = () => {
     $model.value = pConfig.model || '';
     if (p === 'custom') {
         $format.value = pConfig.format || 'anthropic';
-        $wireApi.value = pConfig.wireApi || 'chat.completions';
     }
-    updateCustomProviderUI();
+    $wireApi.value = pConfig.wireApi || 'chat.completions';
+    updateProviderUI();
     $enableThinking.checked = pConfig.enableThinking || false;
     updateKeyStatus(pConfig.hasApiKey);
     $apiKey.value = '';
@@ -473,7 +475,7 @@ $provider.onchange = () => {
     availableModels = [];
     $modelInfo.textContent = '';
 };
-$format.onchange = () => updateCustomProviderUI();
+$format.onchange = () => updateProviderUI();
 $refreshModelsBtn.onclick = () => {
     const provider = $provider.value;
     $modelInfo.textContent = '正在获取模型列表...';
@@ -664,9 +666,9 @@ window.addEventListener('message', e => {
         $baseUrl.value = pConfig.baseUrl || ''; $model.value = pConfig.model || '';
         if (msg.config.provider === 'custom') {
             $format.value = pConfig.format || 'anthropic';
-            $wireApi.value = pConfig.wireApi || 'chat.completions';
         }
-        updateCustomProviderUI();
+        $wireApi.value = pConfig.wireApi || 'chat.completions';
+        updateProviderUI();
         $enableThinking.checked = pConfig.enableThinking || false;
         updateKeyStatus(pConfig.hasApiKey);
         if (msg.embeddingStatus) updateEmbeddingUI(msg.embeddingStatus);

@@ -1,5 +1,7 @@
 // ===== Provider 配置常量和格式检测 =====
 
+import { OpenAIWireApi } from './types';
+
 export const PROVIDERS = ['minimax', 'anthropic', 'deepseek', 'glm', 'openai', 'google', 'kimi', 'kimi-anthropic', 'custom'];
 
 export const PROVIDER_NAMES: Record<string, string> = {
@@ -37,6 +39,41 @@ export const DEFAULT_MODELS: Record<string, string> = {
     'kimi-anthropic': 'kimi-for-coding',  // 根据 OpenCode 配置，使用 kimi-for-coding
     custom: ''
 };
+
+type ConfigReader = {
+    get<T>(section: string, defaultValue: T): T;
+};
+
+export function inferOpenAIWireApiFromBaseUrl(baseUrl: string): OpenAIWireApi | undefined {
+    const trimmedBaseUrl = (baseUrl || '').trim();
+    if (!trimmedBaseUrl) return undefined;
+
+    try {
+        const pathname = new URL(trimmedBaseUrl).pathname.replace(/\/+$/, '');
+        if (pathname.endsWith('/responses')) return 'responses';
+        if (pathname.endsWith('/chat/completions')) return 'chat.completions';
+    } catch {
+        return undefined;
+    }
+
+    return undefined;
+}
+
+export function getConfiguredOpenAIWireApi(provider: string, config: ConfigReader, baseUrl?: string): OpenAIWireApi {
+    if (provider === 'custom') {
+        const format = config.get<string>('custom.format', 'anthropic');
+        const fallback = inferOpenAIWireApiFromBaseUrl(baseUrl || config.get('custom.baseUrl', '')) || 'chat.completions';
+        if (format !== 'openai') return fallback;
+        return config.get('custom.wireApi', fallback);
+    }
+
+    if (provider === 'openai') {
+        const fallback = inferOpenAIWireApiFromBaseUrl(baseUrl || config.get('openai.baseUrl', DEFAULT_BASE_URLS.openai)) || 'chat.completions';
+        return config.get('openai.wireApi', fallback);
+    }
+
+    return inferOpenAIWireApiFromBaseUrl(baseUrl || '') || 'chat.completions';
+}
 
 // 判断是否为 Anthropic 格式
 // DeepSeek 和 Kimi Anthropic 提供 Anthropic 兼容 API

@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { state, log } from './globals';
 import type { CanvasState, ConversationState, RecordedEvent } from './globals';
 import { CodebaseRetrievalRequest, CodeSnippet } from './types';
-import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS, isAnthropicFormat, isGoogleFormat } from './config';
+import { PROVIDERS, PROVIDER_NAMES, DEFAULT_BASE_URLS, DEFAULT_MODELS, getConfiguredOpenAIWireApi, isAnthropicFormat, isGoogleFormat, isOpenAIFormat } from './config';
 import { sendAugmentError } from './messages';
 import { forwardToAnthropicStream } from './providers/anthropic';
 import { forwardToOpenAIStream } from './providers/openai';
@@ -956,8 +956,8 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
     state.currentConfig.port = config.get('port', 8765);
     state.currentConfig.baseUrl = config.get(`${state.currentConfig.provider}.baseUrl`, DEFAULT_BASE_URLS[state.currentConfig.provider]);
     state.currentConfig.model = config.get(`${state.currentConfig.provider}.model`, DEFAULT_MODELS[state.currentConfig.provider]);
-    state.currentConfig.wireApi = state.currentConfig.provider === 'custom'
-        ? config.get('custom.wireApi', 'chat.completions')
+    state.currentConfig.wireApi = isOpenAIFormat(state.currentConfig.provider)
+        ? getConfiguredOpenAIWireApi(state.currentConfig.provider, config, state.currentConfig.baseUrl)
         : 'chat.completions';
     if (state.currentConfig.provider === 'minimax') { state.currentConfig.enableCache = config.get('minimax.enableCache', true); state.currentConfig.enableInterleavedThinking = config.get('minimax.enableInterleavedThinking', true); }
     if (state.currentConfig.provider === 'deepseek') { state.currentConfig.enableThinking = config.get('deepseek.enableThinking', true); }
@@ -982,6 +982,9 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
             log(`端口: ${state.currentConfig.port}`);
             log(`Base URL: ${state.currentConfig.baseUrl}`);
             log(`Model: ${state.currentConfig.model}`);
+            if (isOpenAIFormat(state.currentConfig.provider)) {
+                log(`Wire API: ${state.currentConfig.wireApi}`);
+            }
 
             // 初始化 Viking Context Store
             try {
@@ -1076,8 +1079,8 @@ export async function refreshConfig() {
     state.currentConfig.port = config.get('port', 8765);
     state.currentConfig.baseUrl = config.get(`${newProvider}.baseUrl`, DEFAULT_BASE_URLS[newProvider]);
     state.currentConfig.model = config.get(`${newProvider}.model`, DEFAULT_MODELS[newProvider]);
-    state.currentConfig.wireApi = newProvider === 'custom'
-        ? config.get('custom.wireApi', 'chat.completions')
+    state.currentConfig.wireApi = isOpenAIFormat(newProvider)
+        ? getConfiguredOpenAIWireApi(newProvider, config, state.currentConfig.baseUrl)
         : 'chat.completions';
     if (newProvider === 'minimax') {
         state.currentConfig.enableCache = config.get('minimax.enableCache', true);

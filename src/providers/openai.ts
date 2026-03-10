@@ -5,6 +5,7 @@ import * as http from 'http';
 import { URL } from 'url';
 import { state, log } from '../globals';
 import { OpenAIRequestResult, OpenAIWireApi } from '../types';
+import { inferOpenAIWireApiFromBaseUrl } from '../config';
 import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError, splitReasoningContentFromText } from '../messages';
 import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
@@ -113,11 +114,15 @@ function normalizeKimiMessages(messages: any[]): any[] {
     return normalizedMessages;
 }
 
-function getOpenAIWireApi(): OpenAIWireApi {
-    if (state.currentConfig.provider === 'custom') {
-        return state.currentConfig.wireApi || 'chat.completions';
+function getOpenAIWireApi(baseUrl?: string): OpenAIWireApi {
+    const configuredWireApi = state.currentConfig.wireApi;
+    const inferredWireApi = inferOpenAIWireApiFromBaseUrl(baseUrl || state.currentConfig.baseUrl);
+
+    if (configuredWireApi === 'responses' || inferredWireApi === 'responses') {
+        return 'responses';
     }
-    return 'chat.completions';
+
+    return configuredWireApi || inferredWireApi || 'chat.completions';
 }
 
 function resolveOpenAIEndpoint(baseUrl: string, wireApi: OpenAIWireApi): string {
@@ -130,7 +135,13 @@ function resolveOpenAIEndpoint(baseUrl: string, wireApi: OpenAIWireApi): string 
     const url = new URL(trimmedBaseUrl);
     const pathname = url.pathname.replace(/\/+$/, '');
 
-    if (pathname.endsWith('/chat/completions') || pathname.endsWith('/responses')) {
+    if (pathname.endsWith('/chat/completions')) {
+        url.pathname = `${pathname.replace(/\/chat\/completions$/, '')}${targetSuffix}`;
+        return url.toString();
+    }
+
+    if (pathname.endsWith('/responses')) {
+        url.pathname = `${pathname.replace(/\/responses$/, '')}${targetSuffix}`;
         return url.toString();
     }
 
@@ -145,6 +156,14 @@ function resolveOpenAIEndpoint(baseUrl: string, wireApi: OpenAIWireApi): string 
     }
 
     return url.toString();
+}
+
+function shouldRetryWithResponses(statusCode: number | undefined, errorBody: string): boolean {
+    if (statusCode !== 400) return false;
+    const normalized = (errorBody || '').toLowerCase();
+    return normalized.includes('unsupported legacy protocol')
+        || normalized.includes('please use /v1/responses')
+        || normalized.includes('/v1/responses');
 }
 
 function convertOpenAIToolsForResponses(tools?: any[]): any[] | undefined {
@@ -395,10 +414,12 @@ export async function executeOpenAIRequest(
     model: string,
     onTextDelta?: (delta: string) => void,
     responseFormat?: any,
-    continuation?: { previousResponseId?: string; responseInputs?: any[] }
+    continuation?: { previousResponseId?: string; responseInputs?: any[] },
+    requestOptions?: { wireApiOverride?: OpenAIWireApi; allowResponsesFallback?: boolean }
 ): Promise<OpenAIRequestResult> {
     return new Promise((resolve, reject) => {
-        const wireApi = getOpenAIWireApi();
+        const wireApi = requestOptions?.wireApiOverride || getOpenAIWireApi(apiEndpoint);
+        const allowResponsesFallback = requestOptions?.allowResponsesFallback !== false;
         const resolvedEndpoint = resolveOpenAIEndpoint(apiEndpoint, wireApi);
         const requestBody = buildOpenAIRequestBody(messages, tools, model, responseFormat, wireApi, continuation);
 
@@ -440,6 +461,21 @@ export async function executeOpenAIRequest(
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);
                 apiRes.on('end', () => {
+                    if (allowResponsesFallback && wireApi !== 'responses' && shouldRetryWithResponses(apiRes.statusCode, errorBody)) {
+                        log('[API-EXEC] Legacy protocol rejected, retrying with responses');
+                        executeOpenAIRequest(
+                            messages,
+                            tools,
+                            apiEndpoint,
+                            apiKey,
+                            model,
+                            onTextDelta,
+                            responseFormat,
+                            continuation,
+                            { wireApiOverride: 'responses', allowResponsesFallback: false }
+                        ).then(resolve).catch(reject);
+                        return;
+                    }
                     log(`[API-EXEC ERROR] Status ${apiRes.statusCode}: ${errorBody.slice(0, 300)}`);
                     reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 100)}`));
                 });
