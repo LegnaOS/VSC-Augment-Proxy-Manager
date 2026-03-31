@@ -223,9 +223,10 @@ v3.4.0  Agent 工具系统进化 — Tool 类型系统 + ToolRegistry
 
 ### v3.4.1 — GLM 工具循环 messages 参数修复
 
-- **GLM 400 修复** — GLM (glm-5.1) 不支持 `reasoning_content` 字段和 `content: null`，工具循环第二轮回传 assistant 消息时触发 `messages 参数非法` 400 错误
-- **assistant content 修复** — 工具循环和历史回放中 `content: null` 改为 `content: ''`（空字符串），兼容所有 provider
-- **reasoning_content 条件注入** — 只对 DeepSeek/Kimi 注入 `reasoning_content`，GLM/OpenAI/其他 provider 跳过，避免不兼容字段污染请求
+- **GLM tool calling 多轮回放修复** — GLM coding 端点 (`/api/coding/paas/v4`) 不支持标准 OpenAI tool calling 多轮回放格式（`assistant(tool_calls) + tool(results)`），continuation 时稳定触发 `messages 参数非法` 400 错误
+- **GLM 消息折叠策略** — 对 GLM provider，历史中的 `assistant(tool_calls) + tool(results)` 自动折叠为纯文本 `assistant + user` 消息对，完全绕开多轮回放兼容性问题
+- **工具循环内部同步修复** — 代理内部工具循环（拦截工具执行后回传 AI）也对 GLM 使用纯文本折叠，确保工具链闭环
+- **reasoning_content 条件注入** — 只对 DeepSeek/Kimi 注入，GLM/OpenAI 跳过
 
 ### v3.4.0 — Agent 工具系统进化
 

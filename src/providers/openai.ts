@@ -591,8 +591,11 @@ export async function executeOpenAIRequest(
                 const contentType = m?.content === null ? 'null' : typeof m?.content;
                 const hasToolCalls = Array.isArray(m?.tool_calls) ? m.tool_calls.length : 0;
                 const hasReasoning = m?.reasoning_content ? 'yes' : 'no';
-                log(`[GLM-DEBUG] msg[${mi}] role=${m?.role} keys=[${keys}] content=${contentType}(${String(m?.content).substring(0, 50)}) tool_calls=${hasToolCalls} reasoning=${hasReasoning}`);
+                const tcIds = Array.isArray(m?.tool_calls) ? m.tool_calls.map((tc: any) => `${tc?.function?.name}:${tc?.id}`).join(', ') : '';
+                const toolCallId = m?.tool_call_id || '';
+                log(`[GLM-DEBUG] msg[${mi}] role=${m?.role} keys=[${keys}] content=${contentType}(${String(m?.content).substring(0, 80)}) tool_calls=${hasToolCalls}[${tcIds}] tool_call_id=${toolCallId} reasoning=${hasReasoning}`);
             }
+            log(`[GLM-DEBUG] Full request body (first 2000 chars): ${apiBody.substring(0, 2000)}`);
         }
 
         const url = new URL(resolvedEndpoint);
@@ -1069,6 +1072,39 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 }
 
                 // ✅ 所有工具都被拦截了 → 把结果送回 AI 继续生成
+                // GLM: 折叠为纯文本格式（不支持 tool calling 多轮回放）
+                if (state.currentConfig.provider === 'glm') {
+                    const toolSummary = [...interceptedTools.map(({ tc, toolNode }) => {
+                        const content = (toolNode.tool_result_node.content || '').substring(0, 2000);
+                        return `[Result of ${tc.name}]: ${content}`;
+                    }), ...await Promise.all(codebaseSearchCalls.map(async (cs: any) => {
+                        const searchResult = await executeRAGSearch(cs.query);
+                        return `[Result of codebase_search("${cs.query}")]: ${searchResult.substring(0, 2000)}`;
+                    }))].join('\n\n');
+
+                    const textPart = result.text ? splitReasoningContentFromText(result.text).content || '' : '';
+                    const callsSummary = [...otherToolCalls, ...codebaseSearchCalls.map((cs: any) => ({
+                        name: 'codebase_search', arguments: JSON.stringify({ query: cs.query })
+                    }))].map((tc: any) => `[Called ${tc.name}(${(typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments || {})).substring(0, 200)})]`).join('\n');
+
+                    currentMessages.push({ role: 'assistant', content: (textPart + '\n' + callsSummary).trim() });
+                    currentMessages.push({ role: 'user', content: toolSummary });
+
+                    // 流式显示
+                    for (const { tc, toolNode } of interceptedTools) {
+                        try {
+                            const resultObj = JSON.parse(toolNode.tool_result_node.content);
+                            const diffText = renderDiffText(resultObj, tc.name);
+                            res.write(JSON.stringify({ text: diffText, nodes: [], stop_reason: 0 }) + '\n');
+                        } catch {
+                            res.write(JSON.stringify({ text: `\n✅ ${tc.name} executed\n`, nodes: [], stop_reason: 0 }) + '\n');
+                        }
+                    }
+
+                    log(`[LOOP] GLM: folded ${interceptedTools.length} tools + ${codebaseSearchCalls.length} searches into text messages`);
+                    continue;
+                }
+
                 // 1. 构建 assistant message（包含 tool_calls）
                 const allToolCalls = [...otherToolCalls, ...codebaseSearchCalls.map((cs: any) => ({
                     id: cs.id, name: 'codebase_search', arguments: JSON.stringify({ query: cs.query })
@@ -1084,7 +1120,7 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 const assistantReplay = splitReasoningContentFromText(result.text);
                 const assistantReplayMessage: any = {
                     role: 'assistant',
-                    content: assistantReplay.content || '',
+                    content: assistantReplay.content || null,
                     tool_calls: assistantToolCallsMsg
                 };
                 // reasoning_content 只有部分 provider 支持回传（DeepSeek/Kimi）

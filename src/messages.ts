@@ -723,9 +723,24 @@ export function splitReasoningContentFromText(text?: string): { content?: string
 // ===== 将 Augment 请求转换为 OpenAI 格式消息 =====
 export function augmentToOpenAIMessages(req: any) {
     const messages: any[] = [];
+    const isGlm = state.currentConfig.provider === 'glm';
+
     for (const turn of normalizeAugmentTimeline(req)) {
         if (turn.role === 'assistant') {
             if (turn.toolUses && turn.toolUses.length > 0) {
+                // GLM coding 端点不支持 tool calling 多轮回放
+                // 将 assistant(tool_calls) + tool(results) 折叠为纯文本 assistant 消息
+                if (isGlm) {
+                    const toolSummary = turn.toolUses.map((tu: any) => {
+                        let args = '';
+                        try { args = typeof tu.inputJson === 'string' ? tu.inputJson : JSON.stringify(tu.inputJson); } catch {}
+                        return `[Called ${tu.name}(${args.substring(0, 200)})]`;
+                    }).join('\n');
+                    const textPart = turn.text ? splitReasoningContentFromText(turn.text).content || '' : '';
+                    messages.push({ role: 'assistant', content: (textPart + '\n' + toolSummary).trim() });
+                    continue;
+                }
+
                 const { content, reasoningContent } = splitReasoningContentFromText(turn.text);
                 const assistantMessage: any = {
                     role: 'assistant',
@@ -738,10 +753,8 @@ export function augmentToOpenAIMessages(req: any) {
                 if (content) {
                     assistantMessage.content = content;
                 } else {
-                    assistantMessage.content = '';
+                    assistantMessage.content = null;
                 }
-                // reasoning_content 只有部分 provider 支持回传（DeepSeek/Kimi）
-                // GLM 不支持，会导致 "messages 参数非法" 400 错误
                 const supportsReasoningReplay = ['deepseek', 'kimi'].includes(state.currentConfig.provider);
                 if (reasoningContent && supportsReasoningReplay) {
                     assistantMessage.reasoning_content = reasoningContent;
@@ -756,13 +769,25 @@ export function augmentToOpenAIMessages(req: any) {
             continue;
         }
 
+        // GLM: tool results 折叠为 user 消息（与上面的 assistant 折叠配对）
+        if (isGlm && turn.toolResults && turn.toolResults.length > 0) {
+            const resultsSummary = turn.toolResults.map((tr: any) => {
+                const content = (tr.content || '').substring(0, 2000);
+                return `[Result of ${tr.name || 'tool'}]: ${content}`;
+            }).join('\n\n');
+            messages.push({ role: 'user', content: resultsSummary });
+            if (turn.text) {
+                messages.push({ role: 'user', content: turn.text });
+            }
+            continue;
+        }
+
         for (const toolResult of turn.toolResults || []) {
             const toolMsg: any = {
                 role: 'tool',
                 tool_call_id: toolResult.id,
                 content: toolResult.content || ''
             };
-            // GLM 不支持 tool 消息中的 name 字段，会导致 "messages 参数非法"
             if (state.currentConfig.provider !== 'glm') {
                 toolMsg.name = toolResult.name || 'unknown';
             }
