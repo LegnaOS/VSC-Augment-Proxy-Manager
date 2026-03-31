@@ -737,10 +737,13 @@ export function augmentToOpenAIMessages(req: any) {
                 };
                 if (content) {
                     assistantMessage.content = content;
-                } else if (reasoningContent) {
-                    assistantMessage.content = null;
+                } else {
+                    assistantMessage.content = '';
                 }
-                if (reasoningContent) {
+                // reasoning_content 只有部分 provider 支持回传（DeepSeek/Kimi）
+                // GLM 不支持，会导致 "messages 参数非法" 400 错误
+                const supportsReasoningReplay = ['deepseek', 'kimi'].includes(state.currentConfig.provider);
+                if (reasoningContent && supportsReasoningReplay) {
                     assistantMessage.reasoning_content = reasoningContent;
                 }
                 messages.push(assistantMessage);
@@ -754,12 +757,16 @@ export function augmentToOpenAIMessages(req: any) {
         }
 
         for (const toolResult of turn.toolResults || []) {
-            messages.push({
+            const toolMsg: any = {
                 role: 'tool',
                 tool_call_id: toolResult.id,
-                name: toolResult.name || 'unknown',
                 content: toolResult.content || ''
-            });
+            };
+            // GLM 不支持 tool 消息中的 name 字段，会导致 "messages 参数非法"
+            if (state.currentConfig.provider !== 'glm') {
+                toolMsg.name = toolResult.name || 'unknown';
+            }
+            messages.push(toolMsg);
         }
 
         if (turn.text) {

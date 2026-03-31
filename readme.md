@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.4.0-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.4.1-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -220,6 +220,12 @@ v3.4.0  Agent 工具系统进化 — Tool 类型系统 + ToolRegistry
 ```
 
 ## 更新日志
+
+### v3.4.1 — GLM 工具循环 messages 参数修复
+
+- **GLM 400 修复** — GLM (glm-5.1) 不支持 `reasoning_content` 字段和 `content: null`，工具循环第二轮回传 assistant 消息时触发 `messages 参数非法` 400 错误
+- **assistant content 修复** — 工具循环和历史回放中 `content: null` 改为 `content: ''`（空字符串），兼容所有 provider
+- **reasoning_content 条件注入** — 只对 DeepSeek/Kimi 注入 `reasoning_content`，GLM/OpenAI/其他 provider 跳过，避免不兼容字段污染请求
 
 ### v3.4.0 — Agent 工具系统进化
 

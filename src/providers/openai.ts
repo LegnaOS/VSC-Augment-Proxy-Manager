@@ -582,6 +582,19 @@ export async function executeOpenAIRequest(
         }
 
         const apiBody = JSON.stringify(requestBody);
+
+        // DEBUG: dump messages 结构（仅 GLM 时输出）
+        if (state.currentConfig.provider === 'glm') {
+            for (let mi = 0; mi < messages.length; mi++) {
+                const m = messages[mi];
+                const keys = Object.keys(m || {}).join(',');
+                const contentType = m?.content === null ? 'null' : typeof m?.content;
+                const hasToolCalls = Array.isArray(m?.tool_calls) ? m.tool_calls.length : 0;
+                const hasReasoning = m?.reasoning_content ? 'yes' : 'no';
+                log(`[GLM-DEBUG] msg[${mi}] role=${m?.role} keys=[${keys}] content=${contentType}(${String(m?.content).substring(0, 50)}) tool_calls=${hasToolCalls} reasoning=${hasReasoning}`);
+            }
+        }
+
         const url = new URL(resolvedEndpoint);
         const headers: any = {
             'Content-Type': 'application/json',
@@ -1071,22 +1084,29 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 const assistantReplay = splitReasoningContentFromText(result.text);
                 const assistantReplayMessage: any = {
                     role: 'assistant',
-                    content: assistantReplay.content || null,
+                    content: assistantReplay.content || '',
                     tool_calls: assistantToolCallsMsg
                 };
-                if (assistantReplay.reasoningContent) {
+                // reasoning_content 只有部分 provider 支持回传（DeepSeek/Kimi）
+                // GLM 不支持，会导致 "messages 参数非法" 400 错误
+                const supportsReasoningReplay = ['deepseek', 'kimi'].includes(state.currentConfig.provider);
+                if (assistantReplay.reasoningContent && supportsReasoningReplay) {
                     assistantReplayMessage.reasoning_content = assistantReplay.reasoningContent;
                 }
                 currentMessages.push(assistantReplayMessage);
 
                 // 2. 添加拦截工具的执行结果作为 tool message
                 for (const { tc, toolNode } of interceptedTools) {
-                    currentMessages.push({
+                    const toolMsg: any = {
                         role: 'tool',
                         tool_call_id: tc.id,
-                        name: tc.name,
                         content: toolNode.tool_result_node.content
-                    });
+                    };
+                    // GLM 不支持 tool 消息中的 name 字段
+                    if (state.currentConfig.provider !== 'glm') {
+                        toolMsg.name = tc.name;
+                    }
+                    currentMessages.push(toolMsg);
                     // 流式显示执行状态和 diff 给用户
                     try {
                         const resultObj = JSON.parse(toolNode.tool_result_node.content);
@@ -1103,7 +1123,11 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 // 3. 同时处理 codebase_search（如果有）
                 for (const cs of codebaseSearchCalls) {
                     const searchResult = await executeRAGSearch(cs.query);
-                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, name: 'codebase_search', content: searchResult });
+                    const csMsg: any = { role: 'tool', tool_call_id: cs.id, content: searchResult };
+                    if (state.currentConfig.provider !== 'glm') {
+                        csMsg.name = 'codebase_search';
+                    }
+                    currentMessages.push(csMsg);
                     res.write(JSON.stringify({
                         text: `\n📚 **代码库搜索** ("${cs.query.substring(0, 30)}...")\n`,
                         nodes: [], stop_reason: 0
@@ -1149,17 +1173,22 @@ export async function forwardToOpenAIStream(augmentReq: any, res: any) {
                 const assistantReplay = splitReasoningContentFromText(result.text);
                 const assistantReplayMessage: any = {
                     role: 'assistant',
-                    content: assistantReplay.content || null,
+                    content: assistantReplay.content || '',
                     tool_calls: toolCallsForMsg
                 };
-                if (assistantReplay.reasoningContent) {
+                const supportsReasoningReplay2 = ['deepseek', 'kimi'].includes(state.currentConfig.provider);
+                if (assistantReplay.reasoningContent && supportsReasoningReplay2) {
                     assistantReplayMessage.reasoning_content = assistantReplay.reasoningContent;
                 }
                 currentMessages.push(assistantReplayMessage);
 
                 for (const cs of codebaseSearchCalls) {
                     const searchResult = await executeRAGSearch(cs.query);
-                    currentMessages.push({ role: 'tool', tool_call_id: cs.id, name: 'codebase_search', content: searchResult });
+                    const csMsg2: any = { role: 'tool', tool_call_id: cs.id, content: searchResult };
+                    if (state.currentConfig.provider !== 'glm') {
+                        csMsg2.name = 'codebase_search';
+                    }
+                    currentMessages.push(csMsg2);
                     res.write(JSON.stringify({
                         text: `\n\n🔍 **代码库搜索** (查询: "${cs.query}")\n${searchResult.split('\n').slice(0, 5).join('\n')}...\n\n`,
                         nodes: [], stop_reason: 0
