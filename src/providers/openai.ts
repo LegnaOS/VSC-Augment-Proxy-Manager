@@ -166,6 +166,34 @@ function shouldRetryWithResponses(statusCode: number | undefined, errorBody: str
         || normalized.includes('/v1/responses');
 }
 
+function shouldRetryTransientUpstreamFailure(statusCode: number | undefined, errorBody: string): boolean {
+    if (![502, 503, 504].includes(statusCode || 0)) {
+        return false;
+    }
+    const normalized = (errorBody || '').toLowerCase();
+    return !normalized
+        || normalized.includes('upstream request failed')
+        || normalized.includes('upstream_error')
+        || normalized.includes('bad gateway')
+        || normalized.includes('gateway timeout')
+        || normalized.includes('service unavailable');
+}
+
+function shouldRetryTransientTransportError(error: any): boolean {
+    const normalized = String(error?.message || error || '').toLowerCase();
+    return normalized.includes('timeout')
+        || normalized.includes('socket hang up')
+        || normalized.includes('econnreset')
+        || normalized.includes('econnrefused')
+        || normalized.includes('etimedout')
+        || normalized.includes('ehostunreach')
+        || normalized.includes('network');
+}
+
+function getTransientRetryDelayMs(retryAttempt: number): number {
+    return 800 * (retryAttempt + 1);
+}
+
 function convertOpenAIToolsForResponses(tools?: any[]): any[] | undefined {
     if (!tools || tools.length === 0) {
         return undefined;
@@ -197,6 +225,10 @@ function buildResponsesMessageText(message: any): string {
     return content;
 }
 
+function getResponsesMessageContentType(role: string | undefined): 'input_text' | 'output_text' {
+    return role === 'assistant' ? 'output_text' : 'input_text';
+}
+
 function convertOpenAIMessagesToResponsesInput(messages: any[]): any[] {
     const input: any[] = [];
 
@@ -211,14 +243,19 @@ function convertOpenAIMessagesToResponsesInput(messages: any[]): any[] {
                 input.push({
                     type: 'message',
                     role: 'assistant',
-                    content: [{ type: 'input_text', text: assistantText }]
+                    content: [{ type: 'output_text', text: assistantText }]
                 });
             }
             for (const toolCall of message.tool_calls) {
+                const toolName = toolCall?.function?.name;
+                if (!toolName) {
+                    log('[RESPONSES INPUT] Dropping assistant tool_call without function name');
+                    continue;
+                }
                 input.push({
                     type: 'function_call',
                     call_id: toolCall?.id,
-                    name: toolCall?.function?.name || 'tool',
+                    name: toolName,
                     arguments: typeof toolCall?.function?.arguments === 'string'
                         ? toolCall.function.arguments
                         : JSON.stringify(toolCall?.function?.arguments || {})
@@ -241,7 +278,7 @@ function convertOpenAIMessagesToResponsesInput(messages: any[]): any[] {
         input.push({
             type: 'message',
             role: message.role,
-            content: [{ type: 'input_text', text: buildResponsesMessageText(message) }]
+            content: [{ type: getResponsesMessageContentType(message.role), text: buildResponsesMessageText(message) }]
         });
     }
 
@@ -381,27 +418,142 @@ function extractTextFromCompletedResponse(response: any): string {
     return textParts.join('');
 }
 
+type ResponsesToolCallState = { id: string; name: string; arguments: string };
+
+function getResponsesToolCallName(source: any): string | undefined {
+    const name = source?.name || source?.function?.name || source?.tool_name || source?.toolName;
+    if (typeof name !== 'string') {
+        return undefined;
+    }
+    const trimmed = name.trim();
+    return trimmed || undefined;
+}
+
+function stringifyResponsesToolCallArguments(argumentsValue: any, fallback = ''): string {
+    if (typeof argumentsValue === 'string') {
+        return argumentsValue;
+    }
+    if (argumentsValue === undefined) {
+        return fallback;
+    }
+    try {
+        return JSON.stringify(argumentsValue || {});
+    } catch {
+        return fallback;
+    }
+}
+
+function registerResponsesToolCallAliases(
+    aliases: Map<string, string>,
+    canonicalKey: string,
+    ids: Array<string | number | undefined>
+) {
+    for (const id of ids) {
+        if (id === undefined || id === null) {
+            continue;
+        }
+        const normalized = String(id).trim();
+        if (!normalized) {
+            continue;
+        }
+        aliases.set(normalized, canonicalKey);
+    }
+}
+
+function resolveResponsesToolCallKey(
+    toolCalls: Map<string, ResponsesToolCallState>,
+    aliases: Map<string, string>,
+    ids: Array<string | number | undefined>,
+    fallbackKey: string
+): string {
+    const normalizedIds = ids
+        .filter((id): id is string | number => id !== undefined && id !== null)
+        .map((id) => String(id).trim())
+        .filter(Boolean);
+
+    for (const id of normalizedIds) {
+        const aliasedKey = aliases.get(id);
+        if (aliasedKey) {
+            return aliasedKey;
+        }
+    }
+
+    for (const id of normalizedIds) {
+        if (toolCalls.has(id)) {
+            return id;
+        }
+    }
+
+    return normalizedIds[0] || fallbackKey;
+}
+
+function getOrCreateResponsesToolCall(
+    toolCalls: Map<string, ResponsesToolCallState>,
+    aliases: Map<string, string>,
+    payload: { callId?: string; itemId?: string; outputIndex?: number; name?: string; preferCallId?: boolean }
+): { key: string; toolCall: ResponsesToolCallState } {
+    const candidateIds = payload.preferCallId
+        ? [payload.callId, payload.itemId, payload.outputIndex]
+        : [payload.itemId, payload.callId, payload.outputIndex];
+    const key = resolveResponsesToolCallKey(toolCalls, aliases, candidateIds, `responses_tool_${toolCalls.size}`);
+    const toolCall = toolCalls.get(key) || {
+        id: payload.callId || payload.itemId || String(payload.outputIndex ?? key),
+        name: '',
+        arguments: ''
+    };
+
+    if (payload.callId) {
+        toolCall.id = payload.callId;
+    } else if (!toolCall.id && payload.itemId) {
+        toolCall.id = payload.itemId;
+    }
+
+    if (payload.name) {
+        toolCall.name = payload.name;
+    }
+
+    toolCalls.set(key, toolCall);
+    registerResponsesToolCallAliases(aliases, key, [key, toolCall.id, payload.callId, payload.itemId, payload.outputIndex]);
+    return { key, toolCall };
+}
+
+function finalizeResponsesToolCalls(toolCalls: Map<string, ResponsesToolCallState>): ResponsesToolCallState[] {
+    const finalized: ResponsesToolCallState[] = [];
+
+    for (const toolCall of toolCalls.values()) {
+        if (!toolCall.name) {
+            log(`[API-EXEC WARN] Dropping responses tool call without name: id=${toolCall.id}`);
+            continue;
+        }
+        finalized.push(toolCall);
+    }
+
+    return finalized;
+}
+
 function mergeResponsesToolCalls(
     response: any,
-    partialToolCalls: Map<string, { id: string; name: string; arguments: string }>
+    partialToolCalls: Map<string, ResponsesToolCallState>,
+    aliases: Map<string, string>
 ): Array<{ id: string; name: string; arguments: string }> {
     const toolCalls = new Map(partialToolCalls);
+    const mergedAliases = new Map(aliases);
 
     for (const item of response?.output || []) {
         if (item?.type !== 'function_call') {
             continue;
         }
-        const key = item.call_id || item.id || `${item.name || 'tool'}_${toolCalls.size}`;
-        toolCalls.set(key, {
-            id: item.call_id || item.id || key,
-            name: item.name || 'tool',
-            arguments: typeof item.arguments === 'string'
-                ? item.arguments
-                : JSON.stringify(item.arguments || {})
+        const { toolCall } = getOrCreateResponsesToolCall(toolCalls, mergedAliases, {
+            callId: item.call_id,
+            itemId: item.id,
+            outputIndex: item.output_index,
+            name: getResponsesToolCallName(item),
+            preferCallId: true
         });
+        toolCall.arguments = stringifyResponsesToolCallArguments(item.arguments, toolCall.arguments);
     }
 
-    return Array.from(toolCalls.values());
+    return finalizeResponsesToolCalls(toolCalls);
 }
 
 // ========== 执行单次 OpenAI API 请求（真流式） ==========
@@ -415,11 +567,12 @@ export async function executeOpenAIRequest(
     onTextDelta?: (delta: string) => void,
     responseFormat?: any,
     continuation?: { previousResponseId?: string; responseInputs?: any[] },
-    requestOptions?: { wireApiOverride?: OpenAIWireApi; allowResponsesFallback?: boolean }
+    requestOptions?: { wireApiOverride?: OpenAIWireApi; allowResponsesFallback?: boolean; transientRetryAttempt?: number }
 ): Promise<OpenAIRequestResult> {
     return new Promise((resolve, reject) => {
         const wireApi = requestOptions?.wireApiOverride || getOpenAIWireApi(apiEndpoint);
         const allowResponsesFallback = requestOptions?.allowResponsesFallback !== false;
+        const transientRetryAttempt = requestOptions?.transientRetryAttempt || 0;
         const resolvedEndpoint = resolveOpenAIEndpoint(apiEndpoint, wireApi);
         const requestBody = buildOpenAIRequestBody(messages, tools, model, responseFormat, wireApi, continuation);
 
@@ -448,12 +601,36 @@ export async function executeOpenAIRequest(
             headers
         };
 
-        log(`[API-EXEC] Sending request to ${resolvedEndpoint}, wireApi=${wireApi}, messages=${messages.length}`);
+        const retryTransientRequest = (reason: string): boolean => {
+            if (transientRetryAttempt >= 1) {
+                return false;
+            }
+            const nextAttempt = transientRetryAttempt + 1;
+            const delayMs = getTransientRetryDelayMs(transientRetryAttempt);
+            log(`[API-EXEC] Transient upstream failure, retrying in ${delayMs}ms (attempt ${nextAttempt}/1): ${reason}`);
+            setTimeout(() => {
+                executeOpenAIRequest(
+                    messages,
+                    tools,
+                    apiEndpoint,
+                    apiKey,
+                    model,
+                    onTextDelta,
+                    responseFormat,
+                    continuation,
+                    { ...requestOptions, transientRetryAttempt: nextAttempt }
+                ).then(resolve).catch(reject);
+            }, delayMs);
+            return true;
+        };
+
+        log(`[API-EXEC] Sending request to ${resolvedEndpoint}, wireApi=${wireApi}, messages=${messages.length}, tools=${tools?.length || 0}, bodyBytes=${Buffer.byteLength(apiBody)}, continuation=${continuation?.previousResponseId ? 'yes' : 'no'}, retry=${transientRetryAttempt}`);
         const result: OpenAIRequestResult = { text: '', toolCalls: [], finishReason: null, thinkingContent: '' };
         let buffer = '';
         const thinkingState = { inThinking: false };
         const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
-        const responsesToolCallsMap = new Map<string, { id: string; name: string; arguments: string }>();
+        const responsesToolCallsMap = new Map<string, ResponsesToolCallState>();
+        const responsesToolCallAliases = new Map<string, string>();
 
         const httpModule = url.protocol === 'https:' ? https : http;
         const apiReq = httpModule.request(options, (apiRes: any) => {
@@ -476,6 +653,14 @@ export async function executeOpenAIRequest(
                         ).then(resolve).catch(reject);
                         return;
                     }
+
+                    if (shouldRetryTransientUpstreamFailure(apiRes.statusCode, errorBody)) {
+                        const reason = `status=${apiRes.statusCode}, body=${errorBody.slice(0, 160)}`;
+                        if (retryTransientRequest(reason)) {
+                            return;
+                        }
+                    }
+
                     log(`[API-EXEC ERROR] Status ${apiRes.statusCode}: ${errorBody.slice(0, 300)}`);
                     reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 100)}`));
                 });
@@ -526,43 +711,45 @@ export async function executeOpenAIRequest(
                             }
 
                             if ((eventType === 'response.output_item.added' || eventType === 'response.output_item.done') && event.item?.type === 'function_call') {
-                                const key = event.item.call_id || event.item.id || `${responsesToolCallsMap.size}`;
-                                responsesToolCallsMap.set(key, {
-                                    id: event.item.call_id || event.item.id || key,
-                                    name: event.item.name || responsesToolCallsMap.get(key)?.name || 'tool',
-                                    arguments: typeof event.item.arguments === 'string'
-                                        ? event.item.arguments
-                                        : responsesToolCallsMap.get(key)?.arguments || ''
+                                const { toolCall } = getOrCreateResponsesToolCall(responsesToolCallsMap, responsesToolCallAliases, {
+                                    callId: event.item.call_id,
+                                    itemId: event.item.id,
+                                    outputIndex: event.output_index,
+                                    name: getResponsesToolCallName(event.item),
+                                    preferCallId: true
                                 });
+                                if (event.item.arguments !== undefined) {
+                                    toolCall.arguments = stringifyResponsesToolCallArguments(event.item.arguments, toolCall.arguments);
+                                }
                                 continue;
                             }
 
                             if (eventType === 'response.function_call_arguments.delta') {
                                 closeThinking(result, onTextDelta, thinkingState);
-                                const key = event.call_id || event.item_id || `${event.output_index ?? responsesToolCallsMap.size}`;
-                                const existing = responsesToolCallsMap.get(key) || {
-                                    id: event.call_id || key,
-                                    name: event.name || 'tool',
-                                    arguments: ''
-                                };
-                                existing.id = event.call_id || existing.id;
-                                if (event.name) existing.name = event.name;
-                                if (typeof event.delta === 'string') existing.arguments += event.delta;
-                                responsesToolCallsMap.set(key, existing);
+                                const { toolCall } = getOrCreateResponsesToolCall(responsesToolCallsMap, responsesToolCallAliases, {
+                                    callId: event.call_id,
+                                    itemId: event.item_id,
+                                    outputIndex: event.output_index,
+                                    name: getResponsesToolCallName(event),
+                                    preferCallId: true
+                                });
+                                if (typeof event.delta === 'string') {
+                                    toolCall.arguments += event.delta;
+                                }
                                 continue;
                             }
 
                             if (eventType === 'response.function_call_arguments.done') {
-                                const key = event.call_id || event.item_id || `${event.output_index ?? responsesToolCallsMap.size}`;
-                                const existing = responsesToolCallsMap.get(key) || {
-                                    id: event.call_id || key,
-                                    name: event.name || 'tool',
-                                    arguments: ''
-                                };
-                                existing.id = event.call_id || existing.id;
-                                if (event.name) existing.name = event.name;
-                                if (typeof event.arguments === 'string') existing.arguments = event.arguments;
-                                responsesToolCallsMap.set(key, existing);
+                                const { toolCall } = getOrCreateResponsesToolCall(responsesToolCallsMap, responsesToolCallAliases, {
+                                    callId: event.call_id,
+                                    itemId: event.item_id,
+                                    outputIndex: event.output_index,
+                                    name: getResponsesToolCallName(event),
+                                    preferCallId: true
+                                });
+                                if (event.arguments !== undefined) {
+                                    toolCall.arguments = stringifyResponsesToolCallArguments(event.arguments, toolCall.arguments);
+                                }
                                 continue;
                             }
 
@@ -575,7 +762,7 @@ export async function executeOpenAIRequest(
                                     result.text = fallbackText;
                                     if (onTextDelta) onTextDelta(fallbackText);
                                 }
-                                result.toolCalls = mergeResponsesToolCalls(event.response, responsesToolCallsMap);
+                                result.toolCalls = mergeResponsesToolCalls(event.response, responsesToolCallsMap, responsesToolCallAliases);
                                 continue;
                             }
 
@@ -644,7 +831,7 @@ export async function executeOpenAIRequest(
 
                 if (wireApi === 'responses') {
                     if (result.toolCalls.length === 0 && responsesToolCallsMap.size > 0) {
-                        result.toolCalls = Array.from(responsesToolCallsMap.values());
+                        result.toolCalls = finalizeResponsesToolCalls(responsesToolCallsMap);
                     }
                 } else {
                     for (const [_, tc] of toolCallsMap) { result.toolCalls.push(tc); }
@@ -657,9 +844,20 @@ export async function executeOpenAIRequest(
                 log(`[API-EXEC] Complete: text=${result.text.length}, tools=${result.toolCalls.length}, finish=${result.finishReason}`);
                 resolve(result);
             });
-            apiRes.on('error', (err: any) => { reject(err); });
+            apiRes.on('error', (err: any) => {
+                if (shouldRetryTransientTransportError(err) && retryTransientRequest(`response-error=${err.message || err}`)) {
+                    return;
+                }
+                reject(err);
+            });
         });
-        apiReq.on('error', (err: any) => { log(`[API-EXEC ERROR] ${err.message}`); reject(err); });
+        apiReq.on('error', (err: any) => {
+            if (shouldRetryTransientTransportError(err) && retryTransientRequest(`request-error=${err.message || err}`)) {
+                return;
+            }
+            log(`[API-EXEC ERROR] ${err.message}`);
+            reject(err);
+        });
         apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Request timeout')); });
         apiReq.write(apiBody);
         apiReq.end();

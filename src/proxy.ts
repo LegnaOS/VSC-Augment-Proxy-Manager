@@ -15,6 +15,7 @@ const { RAGContextIndex } = require('./rag');
 const { SemanticEmbeddings, LOCAL_MODELS } = require('./rag/embeddings');
 import { VikingContextStore } from './rag/viking-context';
 import { SessionMemory } from './rag/session-memory';
+import { registerAllTools, globalToolRegistry } from './tools/index';
 
 const MAX_EVENTS_PER_KEY = 200;
 
@@ -483,6 +484,13 @@ function extractKeywords(query: string): string[] {
 
 // ========== RAG 初始化 (v2.0.0: Viking 增强) ==========
 export async function initializeRAGIndex(): Promise<void> {
+    // v3.4.0: 初始化工具注册表
+    if (!state.toolRegistry) {
+        registerAllTools();
+        state.toolRegistry = globalToolRegistry;
+        log(`[TOOLS] Registry initialized: ${globalToolRegistry.getAll().length} tools registered`);
+    }
+
     const roots = getWorkspaceRoots(); if (roots.length === 0) return;
     const workspaceRoot = roots[0];
     const cacheDir = path.join(workspaceRoot, '.augment-rag');

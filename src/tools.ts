@@ -1,6 +1,7 @@
 // ===== 工具参数修正和转换函数 =====
 
 import { state, log } from './globals';
+import { getExtraToolsAnthropic, getExtraToolsOpenAI, getExtraToolsGemini } from './tools/extra-tool-schemas';
 
 // ========== Patch 解析器类型定义 ==========
 interface ParsedPatch {
@@ -616,6 +617,10 @@ export function convertToolDefinitions(toolDefs: any[]): any[] | undefined {
     }
     // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
     // 不注入到 tools schema，避免某些 API 不兼容
+    // v3.4.0: 注入新增工具（bash/glob/grep/file_read/list_directory）
+    if (state.toolRegistry) {
+        tools.push(...getExtraToolsAnthropic());
+    }
     return tools.length > 0 ? tools : undefined;
 }
 export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefined {
@@ -694,6 +699,10 @@ export function convertToolDefinitionsToOpenAI(toolDefs: any[]): any[] | undefin
     }
     // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
     // 不注入到 tools schema，避免某些 API 不兼容
+    // v3.4.0: 注入新增工具（bash/glob/grep/file_read/list_directory）
+    if (state.toolRegistry) {
+        tools.push(...getExtraToolsOpenAI());
+    }
     return tools.length > 0 ? tools : undefined;
 }
 
@@ -724,6 +733,10 @@ export function convertToolDefinitionsToGemini(toolDefs: any[]): any[] {
     }
     // 任务列表工具通过 system prompt 文字描述 + convertOrInterceptFileEdit 拦截实现
     // 不注入到 tools schema，避免某些 API 不兼容
+    // v3.4.0: 注入新增工具（bash/glob/grep/file_read/list_directory）
+    if (state.toolRegistry) {
+        tools.push(...getExtraToolsGemini());
+    }
     return tools;
 }
 // Augment 插件标记 str-replace-editor 为不支持的工具（unsupportedSidecarTools）
@@ -1365,11 +1378,11 @@ export function renderDiffText(interceptResult: any, toolName: string): string {
 //   - { type: 5, tool_use: {...} } - 正常工具调用，发送给 Augment
 //   - { type: 1, tool_result_node: {...} } - 拦截工具，直接返回结果给 AI
 //   - null - 跳过（如截断的工具调用）
-export function processToolCallForAugment(
+export async function processToolCallForAugment(
     tc: { id: string; name: string; arguments: string },
     workspaceInfo: any,
     finishReason: string | null
-): any {
+): Promise<any> {
     log(`[TOOL] Processing: ${tc.name}, id=${tc.id}`);
 
     if (!tc.arguments || tc.arguments === '' || tc.arguments === '{}') {
@@ -1402,6 +1415,40 @@ export function processToolCallForAugment(
             finalToolName = converted.toolName;
             parsed = converted.input;
             log(`[CONVERT] ${tc.name} → ${finalToolName}`);
+        }
+
+        // v3.4.0: 新工具通过 ToolRegistry 异步拦截
+        if (!converted && state.toolRegistry?.isIntercepted(tc.name)) {
+            try {
+                const context = {
+                    workspacePath: workspaceInfo?.workspacePath || '',
+                    repositoryRoot: workspaceInfo?.repositoryRoot || workspaceInfo?.workspacePath || '',
+                    cwd: workspaceInfo?.workspacePath || process.cwd(),
+                    conversationId: workspaceInfo?.conversationId || 'default',
+                };
+                const toolResult = await state.toolRegistry.execute(tc.name, parsed, context);
+                if (toolResult) {
+                    log(`[INTERCEPT] ${tc.name} executed via ToolRegistry`);
+                    return {
+                        type: 1,
+                        tool_result_node: {
+                            tool_use_id: tc.id,
+                            tool_name: tc.name,
+                            content: JSON.stringify(toolResult)
+                        }
+                    };
+                }
+            } catch (e: any) {
+                log(`[REGISTRY] Tool ${tc.name} error: ${e.message}`);
+                return {
+                    type: 1,
+                    tool_result_node: {
+                        tool_use_id: tc.id,
+                        tool_name: tc.name,
+                        content: JSON.stringify({ success: false, error: e.message })
+                    }
+                };
+            }
         }
 
         const fixed = fixToolCallInput(finalToolName, parsed, workspaceInfo);

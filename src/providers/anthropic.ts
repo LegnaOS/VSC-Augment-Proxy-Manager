@@ -7,6 +7,7 @@ import { state, log } from '../globals';
 import { augmentToAnthropicMessages, buildSystemPrompt, extractWorkspaceInfo } from '../messages';
 import { convertToolDefinitions, fixToolCallInput, convertOrInterceptFileEdit, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
+import { renderDiffTextCompat } from '../tools/ToolResultFormatter';
 
 interface AnthropicToolCall { id: string; name: string; input: any; }
 interface AnthropicResult { text: string; toolCalls: AnthropicToolCall[]; stopReason: string; }
@@ -375,6 +376,35 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
                     }
                     interceptedTools.push({ tc, interceptResult: interceptResult.result });
                     log(`[LOOP] Tool ${tc.name} intercepted locally`);
+                } else if (!interceptResult && state.toolRegistry?.isIntercepted(tc.name)) {
+                    // v3.4.0: 新工具通过 ToolRegistry 异步拦截
+                    try {
+                        const context = {
+                            workspacePath: workspaceInfo?.workspacePath || '',
+                            repositoryRoot: workspaceInfo?.repositoryRoot || workspaceInfo?.workspacePath || '',
+                            cwd: workspaceInfo?.workspacePath || process.cwd(),
+                            conversationId: workspaceInfo?.conversationId || 'default',
+                        };
+                        const toolResult = await state.toolRegistry.execute(tc.name, input, context);
+                        if (toolResult) {
+                            let resultContent = JSON.stringify(toolResult);
+                            if (resultContent.length > TOOL_RESULT_SIZE_LIMIT) {
+                                resultContent = resultContent.slice(0, TOOL_RESULT_SIZE_LIMIT) + '\n[...truncated]';
+                            }
+                            interceptedTools.push({ tc, interceptResult: toolResult });
+                            log(`[LOOP] Tool ${tc.name} intercepted via ToolRegistry`);
+                        } else {
+                            nonInterceptedTools.push({ tc, toolNode: {
+                                type: 5, tool_use: {
+                                    tool_use_id: tc.id, tool_name: tc.name,
+                                    input_json: JSON.stringify(input)
+                                }
+                            }});
+                        }
+                    } catch (e: any) {
+                        log(`[LOOP] ToolRegistry error for ${tc.name}: ${e.message}`);
+                        interceptedTools.push({ tc, interceptResult: { success: false, error: e.message } });
+                    }
                 } else {
                     nonInterceptedTools.push({ tc, toolNode: {
                         type: 5, tool_use: {

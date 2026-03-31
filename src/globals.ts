@@ -3,6 +3,7 @@ import * as http from 'http';
 import { CurrentConfig } from './types';
 import type { VikingContextStore } from './rag/viking-context';
 import type { SessionMemory } from './rag/session-memory';
+import type { ToolRegistry } from './tools/ToolRegistry';
 
 export interface RecordedEvent {
     id: string;
@@ -51,6 +52,9 @@ export const state = {
     extensionContext: null as vscode.ExtensionContext | null,
     ragIndex: null as any,
     semanticEngine: null as any,
+
+    // v3.4.0: 工具系统
+    toolRegistry: null as ToolRegistry | null,
 
     // v2.0.0: Viking 子系统
     vikingStore: null as VikingContextStore | null,

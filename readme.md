@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.3.7-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.4.0-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
 </div>
@@ -51,6 +51,22 @@ Augment 扩展  →  本地代理 (:8765)  →  你的 AI 供应商 API
 就这样。无需注入、无需重载、无需登录。
 
 ## 功能特性
+
+### 🛠️ v3.4 — Agent 工具系统进化
+
+- **Tool 类型系统** — 参考 Claude Code 的 `Tool<Input,Output>` 泛型架构，`buildTool()` 工厂模式，fail-closed 安全默认值（isReadOnly=false, isConcurrencySafe=false）
+- **ToolRegistry 注册表** — 统一的工具注册、查找（含 alias）、分发和格式转换，单例模式贯穿全局
+- **并发分区执行** — 只读工具（Glob/Grep/FileRead/ListDirectory/CodebaseSearch）自动并行执行，写入工具严格串行，参考 Claude Code 的 `partitionToolCalls` 策略
+- **5 个新增 Agent 工具**：
+  - `bash` — Shell 命令执行（120s 超时，10MB 输出缓冲）
+  - `glob` — 文件模式搜索（`**/*.ts`、`src/**/*.js`）
+  - `grep` — 内容搜索（优先 ripgrep，fallback grep）
+  - `file_read` — 增强文件读取（行号标注、行范围选择、2MB 限制）
+  - `list_directory` — 目录列表（文件类型 + 大小标注）
+- **工具 Schema 自动注入** — 新工具的 JSON Schema 自动注入到 Anthropic/OpenAI/Gemini 三种格式的 tool_definitions
+- **三 Provider 统一拦截** — Anthropic/OpenAI/Google 三路转发均集成 ToolRegistry 异步拦截，新工具在代理层直接执行
+- **现有工具模块化** — str-replace-editor、save-file、apply_patch、任务列表、codebase_search 等 7 个现有工具从 1427 行的 if/else 链提取为独立模块
+- **共享工具函数** — Patch 解析器（Augment V4A + Unified Diff）、路径修正、通用参数修正提取为 `shared/` 可复用模块
 
 ### 🧠 v3.0 — 智能上下文引擎
 
@@ -134,16 +150,38 @@ src/
 ├── messages.ts           # Augment 协议解析 + System Prompt 注入
 ├── sidebar.ts            # 侧边栏 Webview UI
 ├── config.ts             # 供应商配置
-├── globals.ts            # 全局状态 (Viking/SessionMemory/RAG/Embedding)
+├── globals.ts            # 全局状态 (Viking/SessionMemory/RAG/Embedding/ToolRegistry)
 ├── context-manager.ts    # 上下文管理
 ├── context-compression.ts # 智能压缩
 ├── injection.ts          # Augment 扩展自动配置
 ├── omc.ts                # OMC 编排增强
-├── tools.ts              # 工具调用处理
+├── tools.ts              # 工具调用处理（薄层委托到 tools/）
+├── tools/                # v3.4.0 工具系统
+│   ├── Tool.ts           # 核心接口 + buildTool() 工厂
+│   ├── ToolRegistry.ts   # 工具注册表（查找/分发/并发分区执行）
+│   ├── ToolResultFormatter.ts # Diff 渲染 + 结果格式化
+│   ├── extra-tool-schemas.ts  # 新工具 JSON Schema（三格式注入）
+│   ├── index.ts           # 注册入口
+│   ├── StrReplaceEditorTool.ts  # 精确编辑（insert/str_replace/三级匹配）
+│   ├── SaveFileTool.ts          # 新建文件（已有文件拒绝覆盖）
+│   ├── ApplyPatchTool.ts        # Diff/Patch 应用
+│   ├── TaskListTool.ts          # 任务列表管理
+│   ├── EditFileTool.ts          # 错误桩（提示用 str-replace-editor）
+│   ├── WebSearchTool.ts         # Kimi $web_search 透传
+│   ├── CodebaseSearchTool.ts    # RAG 本地搜索
+│   ├── BashTool.ts              # Shell 命令执行
+│   ├── GlobTool.ts              # 文件模式搜索
+│   ├── GrepTool.ts              # 内容搜索（ripgrep/grep）
+│   ├── FileReadTool.ts          # 增强文件读取
+│   ├── ListDirectoryTool.ts     # 目录列表
+│   └── shared/
+│       ├── patch-parser.ts      # Augment V4A + Unified Diff 解析器
+│       ├── path-utils.ts        # 路径前缀修正
+│       └── input-fixer.ts       # 通用参数修正
 ├── providers/
-│   ├── anthropic.ts      # Anthropic 流式转发
-│   ├── openai.ts         # OpenAI 流式转发
-│   └── google.ts         # Google Gemini 流式转发
+│   ├── anthropic.ts      # Anthropic 流式转发 + ToolRegistry 拦截
+│   ├── openai.ts         # OpenAI 流式转发 + ToolRegistry 拦截
+│   └── google.ts         # Google Gemini 流式转发 + ToolRegistry 拦截
 └── rag/
     ├── index.ts           # RAG 索引 + Viking 增强搜索
     ├── embeddings.ts      # Embedding 引擎 (本地 5 模型 + 远程 API)
@@ -163,7 +201,85 @@ src/
 | Cursor | `~/.cursor/extensions` | `%USERPROFILE%\.cursor\extensions` |
 | Windsurf | `~/.windsurf/extensions` | `%USERPROFILE%\.windsurf\extensions` |
 
+## 进化链
+
+```
+v1.9.0  零注入代理 + RAG 语义搜索
+  ↓
+v2.1.x  Kimi/GLM 多供应商 + OMC 编排
+  ↓
+v3.0.0  Viking 分层上下文 + Session Memory + 本地 Embedding
+  ↓
+v3.1.0  文件编辑引擎重构 + 三 Provider 循环架构 + Diff 渲染
+  ↓
+v3.3.x  OpenAI Responses 协议 + Kimi 工具链闭环 + 状态端点
+  ↓
+v3.4.0  Agent 工具系统进化 — Tool 类型系统 + ToolRegistry
+         + 5 个新工具 (Bash/Glob/Grep/FileRead/ListDir)
+         + 并发分区执行 + 三 Provider 统一拦截
+```
+
 ## 更新日志
+
+### v3.4.0 — Agent 工具系统进化
+
+**🏗️ 架构重构 — 参考 Claude Code Tool 类型系统**
+- 新增 `Tool` 泛型接口 + `buildTool()` 工厂模式，fail-closed 安全默认值
+- 新增 `ToolRegistry` 注册表，统一工具查找（含 alias）、分发、并发分区执行
+- 将 `tools.ts` 中 1427 行的 `convertOrInterceptFileEdit()` if/else 链拆分为 7 个独立工具模块
+- Patch 解析器、路径修正、参数修正提取为 `shared/` 可复用模块
+- `processToolCallForAugment` 改为 async，支持 ToolRegistry 异步拦截
+
+**🔧 5 个新增 Agent 工具**
+- `bash` — Shell 命令执行（child_process.spawn，120s 超时，10MB 输出缓冲）
+- `glob` — 文件模式搜索（find + 排除 node_modules/.git/dist，200 结果上限）
+- `grep` — 内容搜索（优先 ripgrep，fallback grep，支持正则/大小写/上下文行）
+- `file_read` — 增强文件读取（cat -n 格式行号，offset/limit 行范围，2MB 限制）
+- `list_directory` — 目录列表（目录优先排序，文件大小标注）
+
+**⚡ 三 Provider 统一拦截**
+- Anthropic / OpenAI / Google 三路转发均集成 ToolRegistry 异步拦截
+- 新工具的 JSON Schema 通过 `extra-tool-schemas.ts` 自动注入三种格式的 tool_definitions
+- 只读工具自动并行执行，写入工具严格串行
+- 工具结果大小截断（50KB 上限）
+
+**📁 新增文件（20 个，1625 行）**
+```
+src/tools/Tool.ts, ToolRegistry.ts, ToolResultFormatter.ts, extra-tool-schemas.ts, index.ts
+src/tools/StrReplaceEditorTool.ts, SaveFileTool.ts, ApplyPatchTool.ts, TaskListTool.ts
+src/tools/EditFileTool.ts, WebSearchTool.ts, CodebaseSearchTool.ts
+src/tools/BashTool.ts, GlobTool.ts, GrepTool.ts, FileReadTool.ts, ListDirectoryTool.ts
+src/tools/shared/patch-parser.ts, path-utils.ts, input-fixer.ts
+```
+
+**🔄 修改文件（6 个）**
+- `globals.ts` — 添加 toolRegistry 字段
+- `proxy.ts` — 初始化 ToolRegistry
+- `tools.ts` — 三个 convertToolDefinitions 注入新工具 schema + processToolCallForAugment async 化
+- `providers/anthropic.ts` — 工具循环集成 ToolRegistry 异步拦截
+- `providers/openai.ts` — 通过 processToolCallForAugment 自动集成
+- `providers/google.ts` — 工具循环集成 ToolRegistry 异步拦截
+
+### v3.3.10 — Responses 二轮 assistant history 编码修复
+
+- **assistant history fix** — `responses` 手工重放历史消息时，assistant 角色内容不再错误编码为 `input_text`，改为符合协议语义的 `output_text`
+- **second-turn stability** — 修复“第一轮正常、第二轮稳定 502”这类由 assistant history payload 非法触发的兼容问题
+- **tool-call hygiene** — 历史 `assistant.tool_calls` 中缺失 `function.name` 的脏记录会被直接丢弃，避免继续向上游发送坏的 `function_call` item
+- **compatibility** — 只影响 OpenAI `responses` 历史消息转换逻辑，不改 `chat.completions`、Anthropic、Google 路径
+
+### v3.3.9 — Upstream 502/503/504 保守重试
+
+- **transient upstream retry** — 对 `502 / 503 / 504` 这类瞬时上游错误新增一次保守自动重试，降低 `responses` 请求被中转偶发打死的概率
+- **transport retry** — 对 timeout、`ECONNRESET`、`socket hang up` 等瞬时传输错误也会走同一套单次 retry
+- **better execution logs** — 请求日志现在会带上 `tools` 数量、body 大小、continuation 状态和 retry 次数，方便继续定位上游兼容性问题
+- **safety** — 只重试明显的 transient failure，不会把 `400` 这类真实请求错误伪装成可恢复问题
+
+### v3.3.8 — Responses Tool Call 别名合并修复
+
+- **responses tool alias merge** — 合并 `call_id`、`item.id / item_id`、`output_index` 三套标识，避免同一个 function call 在流式事件和 completed payload 中被拆成两条记录
+- **no fake tool name** — Responses parser 不再把缺失名称的半成品工具调用污染成字面量 `tool`，而是等待最终 payload 回填真实名字
+- **defensive finalize** — 最终仍拿不到真实名字的脏 tool call 会被直接丢弃并记录 warning，避免执行层再报 `Cannot find tool definition for tool 'tool'`
+- **compatibility** — 修复只影响 OpenAI `responses` tool-call 聚合逻辑，不改 `chat.completions`、Anthropic、Google 路径
 
 ### v3.3.7 — OpenAI Provider Wire API 修正 + Responses 自动回退
 
