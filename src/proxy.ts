@@ -16,6 +16,7 @@ const { SemanticEmbeddings, LOCAL_MODELS } = require('./rag/embeddings');
 import { VikingContextStore } from './rag/viking-context';
 import { SessionMemory } from './rag/session-memory';
 import { registerAllTools, globalToolRegistry } from './tools/index';
+import { logProxyStatus } from './outbound-proxy';
 
 const MAX_EVENTS_PER_KEY = 200;
 
@@ -986,6 +987,7 @@ export async function startProxy(extensionContext: vscode.ExtensionContext) {
         state.proxyServer = http.createServer(handleProxyRequest);
         state.proxyServer.listen(state.currentConfig.port, async () => {
             log(`=== 代理服务器启动 ===`);
+            logProxyStatus();
             log(`Provider: ${PROVIDER_NAMES[state.currentConfig.provider]}`);
             log(`端口: ${state.currentConfig.port}`);
             log(`Base URL: ${state.currentConfig.baseUrl}`);

@@ -9,6 +9,7 @@ import { inferOpenAIWireApiFromBaseUrl } from '../config';
 import { augmentToOpenAIMessages, buildSystemPrompt, extractWorkspaceInfo, sendAugmentError, splitReasoningContentFromText } from '../messages';
 import { convertToolDefinitionsToOpenAI, isCodebaseSearchTool, filterCodebaseSearchCalls, processToolCallForAugment, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
+import { createProxiedRequest, generateRequestId } from '../outbound-proxy';
 
 function isKimiProvider(): boolean {
     return state.currentConfig.provider === 'kimi';
@@ -569,7 +570,7 @@ export async function executeOpenAIRequest(
     continuation?: { previousResponseId?: string; responseInputs?: any[] },
     requestOptions?: { wireApiOverride?: OpenAIWireApi; allowResponsesFallback?: boolean; transientRetryAttempt?: number }
 ): Promise<OpenAIRequestResult> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         const wireApi = requestOptions?.wireApiOverride || getOpenAIWireApi(apiEndpoint);
         const allowResponsesFallback = requestOptions?.allowResponsesFallback !== false;
         const transientRetryAttempt = requestOptions?.transientRetryAttempt || 0;
@@ -598,21 +599,19 @@ export async function executeOpenAIRequest(
             log(`[GLM-DEBUG] Full request body (first 2000 chars): ${apiBody.substring(0, 2000)}`);
         }
 
-        const url = new URL(resolvedEndpoint);
+        const requestId = generateRequestId();
         const headers: any = {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'Content-Length': Buffer.byteLength(apiBody)
+            'Content-Length': Buffer.byteLength(apiBody),
+            'x-request-id': requestId
         };
 
         if (state.currentConfig.provider === 'kimi-coding') {
             headers['User-Agent'] = 'KimiCLI/0.77';
         }
 
-        const options = {
-            hostname: url.hostname,
-            port: url.port || (url.protocol === 'https:' ? 443 : 80),
-            path: `${url.pathname}${url.search}`,
+        const options: https.RequestOptions = {
             method: 'POST',
             headers
         };
@@ -623,7 +622,7 @@ export async function executeOpenAIRequest(
             }
             const nextAttempt = transientRetryAttempt + 1;
             const delayMs = getTransientRetryDelayMs(transientRetryAttempt);
-            log(`[API-EXEC] Transient upstream failure, retrying in ${delayMs}ms (attempt ${nextAttempt}/1): ${reason}`);
+            log(`[API-EXEC] Transient upstream failure, retrying ${requestId} in ${delayMs}ms (attempt ${nextAttempt}/1): ${reason}`);
             setTimeout(() => {
                 executeOpenAIRequest(
                     messages,
@@ -640,7 +639,7 @@ export async function executeOpenAIRequest(
             return true;
         };
 
-        log(`[API-EXEC] Sending request to ${resolvedEndpoint}, wireApi=${wireApi}, messages=${messages.length}, tools=${tools?.length || 0}, bodyBytes=${Buffer.byteLength(apiBody)}, continuation=${continuation?.previousResponseId ? 'yes' : 'no'}, retry=${transientRetryAttempt}`);
+        log(`[API-EXEC] ${requestId} -> ${resolvedEndpoint}, wireApi=${wireApi}, messages=${messages.length}, tools=${tools?.length || 0}, bodyBytes=${Buffer.byteLength(apiBody)}, continuation=${continuation?.previousResponseId ? 'yes' : 'no'}, retry=${transientRetryAttempt}`);
         const result: OpenAIRequestResult = { text: '', toolCalls: [], finishReason: null, thinkingContent: '' };
         let buffer = '';
         const thinkingState = { inThinking: false };
@@ -648,8 +647,9 @@ export async function executeOpenAIRequest(
         const responsesToolCallsMap = new Map<string, ResponsesToolCallState>();
         const responsesToolCallAliases = new Map<string, string>();
 
-        const httpModule = url.protocol === 'https:' ? https : http;
-        const apiReq = httpModule.request(options, (apiRes: any) => {
+        let apiReq: http.ClientRequest;
+        try {
+        apiReq = await createProxiedRequest(resolvedEndpoint, options, (apiRes: any) => {
             if (apiRes.statusCode !== 200) {
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);
@@ -871,12 +871,20 @@ export async function executeOpenAIRequest(
             if (shouldRetryTransientTransportError(err) && retryTransientRequest(`request-error=${err.message || err}`)) {
                 return;
             }
-            log(`[API-EXEC ERROR] ${err.message}`);
+            log(`[API-EXEC ERROR] ${requestId}: ${err.message}`);
             reject(err);
         });
         apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Request timeout')); });
         apiReq.write(apiBody);
         apiReq.end();
+        } catch (err: any) {
+            // createProxiedRequest itself failed (e.g. proxy CONNECT error)
+            log(`[API-EXEC] Proxy connection error ${requestId}: ${err.message}`);
+            if (shouldRetryTransientTransportError(err) && retryTransientRequest(`proxy-error=${err.message}`)) {
+                return;
+            }
+            reject(err);
+        }
     });
 }
 

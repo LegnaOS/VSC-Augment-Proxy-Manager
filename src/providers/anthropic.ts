@@ -8,17 +8,19 @@ import { augmentToAnthropicMessages, buildSystemPrompt, extractWorkspaceInfo } f
 import { convertToolDefinitions, fixToolCallInput, convertOrInterceptFileEdit, renderDiffText } from '../tools';
 import { applyContextCompression } from '../context-compression';
 import { renderDiffTextCompat } from '../tools/ToolResultFormatter';
+import { createProxiedRequest, generateRequestId, isTransientStatusCode, isTransientTransportError } from '../outbound-proxy';
 
 interface AnthropicToolCall { id: string; name: string; input: any; }
 interface AnthropicResult { text: string; toolCalls: AnthropicToolCall[]; stopReason: string; }
 
 // ========== 执行单次 Anthropic API 请求 ==========
-function executeAnthropicRequest(
+async function executeAnthropicRequest(
     messages: any[], systemContent: any, tools: any[],
     onTextDelta: (delta: string) => void,
-    additionalParams?: any
+    additionalParams?: any,
+    retryAttempt: number = 0
 ): Promise<AnthropicResult> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         const requestBody: any = {
             model: state.currentConfig.model, max_tokens: 115000,
             system: systemContent, messages, stream: true
@@ -27,73 +29,45 @@ function executeAnthropicRequest(
 
         // ========== 支持所有 Claude API 高级参数 ==========
         if (additionalParams) {
-            // Extended/Adaptive Thinking
-            if (additionalParams.thinking) {
-                requestBody.thinking = additionalParams.thinking;
-            }
-
-            // Output Config (effort, fast_mode, format, schema, strict)
-            if (additionalParams.output_config) {
-                requestBody.output_config = additionalParams.output_config;
-            }
-
-            // Tool Choice
-            if (additionalParams.tool_choice) {
-                requestBody.tool_choice = additionalParams.tool_choice;
-            }
-
-            // Metadata
-            if (additionalParams.metadata) {
-                requestBody.metadata = additionalParams.metadata;
-            }
-
-            // Stop Sequences
-            if (additionalParams.stop_sequences) {
-                requestBody.stop_sequences = additionalParams.stop_sequences;
-            }
-
-            // Temperature
-            if (additionalParams.temperature !== undefined) {
-                requestBody.temperature = additionalParams.temperature;
-            }
-
-            // Top P
-            if (additionalParams.top_p !== undefined) {
-                requestBody.top_p = additionalParams.top_p;
-            }
-
-            // Top K
-            if (additionalParams.top_k !== undefined) {
-                requestBody.top_k = additionalParams.top_k;
-            }
+            if (additionalParams.thinking) requestBody.thinking = additionalParams.thinking;
+            if (additionalParams.output_config) requestBody.output_config = additionalParams.output_config;
+            if (additionalParams.tool_choice) requestBody.tool_choice = additionalParams.tool_choice;
+            if (additionalParams.metadata) requestBody.metadata = additionalParams.metadata;
+            if (additionalParams.stop_sequences) requestBody.stop_sequences = additionalParams.stop_sequences;
+            if (additionalParams.temperature !== undefined) requestBody.temperature = additionalParams.temperature;
+            if (additionalParams.top_p !== undefined) requestBody.top_p = additionalParams.top_p;
+            if (additionalParams.top_k !== undefined) requestBody.top_k = additionalParams.top_k;
         }
         const apiBody = JSON.stringify(requestBody);
 
-        // 记录请求体大小
         const bodySizeKB = (Buffer.byteLength(apiBody) / 1024).toFixed(2);
-        log(`[API] Request body size: ${bodySizeKB} KB, messages: ${messages.length}`);
+        const requestId = generateRequestId();
+        log(`[API] Request ${requestId}: ${bodySizeKB} KB, ${messages.length} messages, retry=${retryAttempt}`);
 
-        const url = new URL(state.currentConfig.baseUrl);
         const headers: any = {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(apiBody),
             'x-api-key': state.currentConfig.apiKey,
-            'anthropic-version': '2023-06-01'
+            'anthropic-version': '2023-06-01',
+            'x-request-id': requestId
         };
         if (state.currentConfig.provider === 'kimi-anthropic') {
             headers['User-Agent'] = 'KimiCLI/0.77';
         }
-        const isHttps = url.protocol === 'https:';
-        // 构建完整的 path（包含 pathname 和 search）
-        const fullPath = url.pathname + (url.search || '');
-        const options = {
-            hostname: url.hostname,
-            port: url.port || (isHttps ? 443 : 80),
-            path: fullPath,
-            method: 'POST',
-            headers
+        const options: https.RequestOptions = { method: 'POST', headers };
+        log(`[API] Sending ${requestId} to ${state.currentConfig.baseUrl}`);
+
+        // Retry helper for transient failures
+        const retryTransient = (reason: string): boolean => {
+            if (retryAttempt >= 1) return false;
+            const delayMs = 800 * (retryAttempt + 1);
+            log(`[API] Transient failure, retrying ${requestId} in ${delayMs}ms: ${reason}`);
+            setTimeout(() => {
+                executeAnthropicRequest(messages, systemContent, tools, onTextDelta, additionalParams, retryAttempt + 1)
+                    .then(resolve).catch(reject);
+            }, delayMs);
+            return true;
         };
-        log(`[API] Sending to ${state.currentConfig.baseUrl} with ${messages.length} messages`);
 
         const result: AnthropicResult = { text: '', toolCalls: [], stopReason: '' };
         let buffer = '';
@@ -103,15 +77,20 @@ function executeAnthropicRequest(
         let currentRedactedThinking: { data: string } | null = null;
         const shouldShowThinking = (state.currentConfig.provider === 'minimax' && state.currentConfig.enableInterleavedThinking) ||
             (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking) ||
-            (additionalParams?.thinking); // 如果启用了 thinking,也显示
+            (additionalParams?.thinking);
 
-        const httpModule = isHttps ? https : http;
-        const apiReq = httpModule.request(options, (apiRes) => {
+        let apiReq: http.ClientRequest;
+        try {
+            apiReq = await createProxiedRequest(state.currentConfig.baseUrl, options, (apiRes) => {
             if (apiRes.statusCode !== 200) {
                 let errorBody = '';
                 apiRes.on('data', (c: any) => errorBody += c);
                 apiRes.on('end', () => {
-                    log(`[API] Error response: ${apiRes.statusCode} ${errorBody.slice(0, 500)}`);
+                    log(`[API] Error ${requestId}: ${apiRes.statusCode} ${errorBody.slice(0, 500)}`);
+                    // Retry on transient upstream errors (502/503/504)
+                    if (isTransientStatusCode(apiRes.statusCode)) {
+                        if (retryTransient(`status=${apiRes.statusCode}`)) return;
+                    }
                     reject(new Error(`API Error ${apiRes.statusCode}: ${errorBody.slice(0, 200)}`));
                 });
                 return;
@@ -220,20 +199,32 @@ function executeAnthropicRequest(
             });
         });
         apiReq.on('error', (err: any) => {
-            log(`[API] Request error: ${err.message}, code: ${err.code}`);
+            log(`[API] Request error ${requestId}: ${err.message}, code: ${err.code}`);
+            // Retry on transient transport errors (ECONNRESET, timeout, etc.)
+            if (isTransientTransportError(err)) {
+                if (retryTransient(`${err.code || err.message}`)) return;
+            }
             reject(err);
         });
         apiReq.on('abort', () => {
-            log(`[API] Request aborted by client or server`);
+            log(`[API] Request ${requestId} aborted`);
             reject(new Error('Request aborted'));
         });
         apiReq.setTimeout(90000, () => {
-            log(`[API] Request timeout after 90s`);
+            log(`[API] Request ${requestId} timeout after 90s`);
             apiReq.destroy();
             reject(new Error('Request timeout after 90s'));
         });
         apiReq.write(apiBody);
         apiReq.end();
+        } catch (err: any) {
+            // createProxiedRequest itself failed (e.g. proxy CONNECT error)
+            log(`[API] Proxy connection error ${requestId}: ${err.message}`);
+            if (isTransientTransportError(err)) {
+                if (retryTransient(`proxy: ${err.message}`)) return;
+            }
+            reject(err);
+        }
     });
 }
 
