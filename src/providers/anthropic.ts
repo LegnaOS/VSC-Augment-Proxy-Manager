@@ -24,18 +24,32 @@ async function executeAnthropicRequest(
         // 按模型动态设置 max_tokens
         const modelLower = (state.currentConfig.model || '').toLowerCase();
         let maxTokens = 16384; // 默认值
-        if (modelLower.includes('claude-opus-4') || modelLower.includes('claude-4-opus')) {
+        // Claude 4.6 系列
+        if (modelLower.includes('claude-opus-4-6') || modelLower.includes('claude-4-6-opus')) {
+            maxTokens = 32000;
+        } else if (modelLower.includes('claude-sonnet-4-6') || modelLower.includes('claude-4-6-sonnet')) {
+            maxTokens = 16384;
+        // Claude 4.5 系列
+        } else if (modelLower.includes('claude-sonnet-4-5') || modelLower.includes('claude-4-5-sonnet')) {
+            maxTokens = 16384;
+        } else if (modelLower.includes('claude-haiku-4-5') || modelLower.includes('claude-4-5-haiku')) {
+            maxTokens = 8192;
+        // Claude 4 系列 (fallback)
+        } else if (modelLower.includes('claude-opus-4') || modelLower.includes('claude-4-opus')) {
             maxTokens = 32000;
         } else if (modelLower.includes('claude-sonnet-4')) {
             maxTokens = 16384;
         } else if (modelLower.includes('claude-haiku-4') || modelLower.includes('claude-4-haiku')) {
             maxTokens = 8192;
+        // Claude 3.7
         } else if (modelLower.includes('claude-3-7') || modelLower.includes('claude-3.7')) {
             maxTokens = 16384;
+        // Claude 3.5
         } else if (modelLower.includes('claude-3-5-sonnet') || modelLower.includes('claude-3.5-sonnet')) {
             maxTokens = 8192;
         } else if (modelLower.includes('claude-3-5-haiku') || modelLower.includes('claude-3.5-haiku')) {
             maxTokens = 8192;
+        // Claude 3
         } else if (modelLower.includes('claude-3-opus')) {
             maxTokens = 4096;
         } else if (modelLower.includes('claude-3-sonnet') || modelLower.includes('claude-3-haiku')) {

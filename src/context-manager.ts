@@ -63,7 +63,16 @@ export function getModelContextLimit(modelName: string): number {
     }
 
     // Claude 系列
-    if (model.includes('claude-4') || model.includes('claude-opus-4') || model.includes('claude-sonnet-4')) {
+    // Claude 4.6
+    if (model.includes('claude-opus-4-6') || model.includes('claude-sonnet-4-6')) {
+        return 200000; // 200K tokens
+    }
+    // Claude 4.5
+    if (model.includes('claude-sonnet-4-5') || model.includes('claude-haiku-4-5')) {
+        return 200000; // 200K tokens
+    }
+    // Claude 4 (fallback)
+    if (model.includes('claude-4') || model.includes('claude-opus-4') || model.includes('claude-sonnet-4') || model.includes('claude-haiku-4')) {
         return 200000; // 200K tokens
     }
     if (model.includes('claude-3-7') || model.includes('claude-3.7')) {
@@ -75,7 +84,7 @@ export function getModelContextLimit(modelName: string): number {
     if (model.includes('claude-3-opus')) {
         return 200000; // 200K tokens
     }
-    if (model.includes('claude-3-haiku') || model.includes('claude-haiku-4')) {
+    if (model.includes('claude-3-haiku')) {
         return 200000; // 200K tokens
     }
     if (model.includes('claude')) {
