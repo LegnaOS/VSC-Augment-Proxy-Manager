@@ -8,7 +8,7 @@
 
 零注入 · 零登录 · 零配置
 
-[![Version](https://img.shields.io/badge/version-3.4.1-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
+[![Version](https://img.shields.io/badge/version-3.5.0-blue.svg)](https://github.com/LegnaOS/VSC-Augment-Proxy-Manager)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)]()
 
