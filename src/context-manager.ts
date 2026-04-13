@@ -32,7 +32,7 @@ interface ContextStats {
  */
 export function getModelContextLimit(modelName: string): number {
     const model = modelName.toLowerCase();
-    
+
     // Gemini 系列
     if (model.includes('gemini-3')) {
         return 1048576; // 1M tokens (2^20)
@@ -61,17 +61,49 @@ export function getModelContextLimit(modelName: string): number {
     if (model.includes('gemini')) {
         return 200000; // 默认 200K
     }
-    
+
     // Claude 系列
-    if (model.includes('claude-3-5') || model.includes('claude-sonnet-4')) {
+    if (model.includes('claude-4') || model.includes('claude-opus-4') || model.includes('claude-sonnet-4')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('claude-3-7') || model.includes('claude-3.7')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('claude-3-5') || model.includes('claude-3.5')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('claude-3-opus')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('claude-3-haiku') || model.includes('claude-haiku-4')) {
         return 200000; // 200K tokens
     }
     if (model.includes('claude')) {
         return 200000; // 200K tokens
     }
-    
+
+    // OpenAI reasoning 系列
+    if (model.includes('o4-mini')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('o3-pro') || model.includes('o3-mini') || model.includes('o3')) {
+        return 200000; // 200K tokens
+    }
+    if (model.includes('o1-pro') || model.includes('o1-mini') || model.includes('o1')) {
+        return 200000; // 200K tokens
+    }
+
     // GPT 系列
-    if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) {
+    if (model.includes('gpt-4.1')) {
+        return 1047576; // ~1M tokens
+    }
+    if (model.includes('gpt-4o-mini')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('gpt-4o')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('gpt-4-turbo')) {
         return 128000; // 128K tokens
     }
     if (model.includes('gpt-4')) {
@@ -83,22 +115,89 @@ export function getModelContextLimit(modelName: string): number {
     if (model.includes('gpt-3.5')) {
         return 4096; // 4K tokens
     }
-    
+
     // DeepSeek 系列
+    if (model.includes('deepseek-r1')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('deepseek-v3')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('deepseek-coder')) {
+        return 128000; // 128K tokens
+    }
     if (model.includes('deepseek')) {
         return 128000; // 128K tokens
     }
-    
+
     // GLM 系列
+    if (model.includes('glm-4-plus') || model.includes('glm-4-long')) {
+        return 1000000; // 1M tokens
+    }
+    if (model.includes('glm-4')) {
+        return 128000; // 128K tokens
+    }
     if (model.includes('glm')) {
         return 128000; // 128K tokens
     }
-    
+
+    // Kimi / Moonshot 系列
+    if (model.includes('kimi-k2')) {
+        return 131072; // 128K tokens
+    }
+    if (model.includes('moonshot-v1-128k') || model.includes('kimi')) {
+        return 131072; // 128K tokens
+    }
+    if (model.includes('moonshot-v1-32k')) {
+        return 32768; // 32K tokens
+    }
+    if (model.includes('moonshot')) {
+        return 8192; // 8K tokens
+    }
+
+    // Qwen 系列
+    if (model.includes('qwen3') || model.includes('qwen2.5')) {
+        return 131072; // 128K tokens
+    }
+    if (model.includes('qwen-long') || model.includes('qwen-turbo')) {
+        return 131072; // 128K tokens
+    }
+    if (model.includes('qwen')) {
+        return 32768; // 32K tokens
+    }
+
     // MiniMax 系列
     if (model.includes('minimax')) {
         return 245760; // ~245K tokens
     }
-    
+
+    // Mistral 系列
+    if (model.includes('mistral-large')) {
+        return 128000; // 128K tokens
+    }
+    if (model.includes('mistral')) {
+        return 32768; // 32K tokens
+    }
+
+    // Llama 系列
+    if (model.includes('llama-4')) {
+        return 1048576; // 1M tokens
+    }
+    if (model.includes('llama-3.3') || model.includes('llama-3.2') || model.includes('llama-3.1')) {
+        return 131072; // 128K tokens
+    }
+    if (model.includes('llama')) {
+        return 8192; // 8K tokens
+    }
+
+    // Yi / 零一万物
+    if (model.includes('yi-large') || model.includes('yi-medium')) {
+        return 32768; // 32K tokens
+    }
+    if (model.includes('yi-')) {
+        return 16384; // 16K tokens
+    }
+
     // 默认值
     return 200000; // 200K tokens
 }

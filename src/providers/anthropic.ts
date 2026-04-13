@@ -21,8 +21,39 @@ async function executeAnthropicRequest(
     retryAttempt: number = 0
 ): Promise<AnthropicResult> {
     return new Promise(async (resolve, reject) => {
+        // 按模型动态设置 max_tokens
+        const modelLower = (state.currentConfig.model || '').toLowerCase();
+        let maxTokens = 16384; // 默认值
+        if (modelLower.includes('claude-opus-4') || modelLower.includes('claude-4-opus')) {
+            maxTokens = 32000;
+        } else if (modelLower.includes('claude-sonnet-4')) {
+            maxTokens = 16384;
+        } else if (modelLower.includes('claude-haiku-4') || modelLower.includes('claude-4-haiku')) {
+            maxTokens = 8192;
+        } else if (modelLower.includes('claude-3-7') || modelLower.includes('claude-3.7')) {
+            maxTokens = 16384;
+        } else if (modelLower.includes('claude-3-5-sonnet') || modelLower.includes('claude-3.5-sonnet')) {
+            maxTokens = 8192;
+        } else if (modelLower.includes('claude-3-5-haiku') || modelLower.includes('claude-3.5-haiku')) {
+            maxTokens = 8192;
+        } else if (modelLower.includes('claude-3-opus')) {
+            maxTokens = 4096;
+        } else if (modelLower.includes('claude-3-sonnet') || modelLower.includes('claude-3-haiku')) {
+            maxTokens = 4096;
+        }
+        // 启用 thinking/extended thinking 时需要更大的 budget
+        if (additionalParams?.thinking?.budget_tokens) {
+            maxTokens = Math.max(maxTokens, additionalParams.thinking.budget_tokens + 8192);
+        } else if (additionalParams?.thinking) {
+            maxTokens = Math.max(maxTokens, 32000);
+        }
+        // MiniMax 走 Anthropic 协议但支持更大输出
+        if (state.currentConfig.provider === 'minimax') {
+            maxTokens = 115000;
+        }
+
         const requestBody: any = {
-            model: state.currentConfig.model, max_tokens: 115000,
+            model: state.currentConfig.model, max_tokens: maxTokens,
             system: systemContent, messages, stream: true
         };
         if (tools && tools.length > 0) { requestBody.tools = tools; }
@@ -37,6 +68,18 @@ async function executeAnthropicRequest(
             if (additionalParams.temperature !== undefined) requestBody.temperature = additionalParams.temperature;
             if (additionalParams.top_p !== undefined) requestBody.top_p = additionalParams.top_p;
             if (additionalParams.top_k !== undefined) requestBody.top_k = additionalParams.top_k;
+        }
+
+        // Thinking 模式与采样参数互斥：Anthropic API 要求启用 thinking 时不能发 temperature
+        // DeepSeek reasoner 也需要 strip temperature/top_p
+        if (requestBody.thinking) {
+            delete requestBody.temperature;
+            delete requestBody.top_p;
+            delete requestBody.top_k;
+        }
+        if (state.currentConfig.provider === 'deepseek' && state.currentConfig.enableThinking) {
+            delete requestBody.temperature;
+            delete requestBody.top_p;
         }
         const apiBody = JSON.stringify(requestBody);
 
@@ -283,15 +326,17 @@ export async function forwardToAnthropicStream(augmentReq: any, res: any) {
     log(`[API] Additional params: ${JSON.stringify(Object.keys(additionalParams))}`);
 
     let systemContent: any = undefined;
+    const shouldCache = state.currentConfig.enableCache &&
+        ['anthropic', 'minimax', 'kimi-anthropic'].includes(state.currentConfig.provider);
     if (system) {
-        if (state.currentConfig.provider === 'minimax' && state.currentConfig.enableCache) {
+        if (shouldCache) {
             systemContent = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }];
         } else {
             systemContent = system;
         }
     }
     let cachedTools = tools;
-    if (state.currentConfig.provider === 'minimax' && state.currentConfig.enableCache && tools && tools.length > 0) {
+    if (shouldCache && tools && tools.length > 0) {
         cachedTools = tools.map((tool: any, index: number) =>
             index === tools.length - 1 ? { ...tool, cache_control: { type: 'ephemeral' } } : tool
         );

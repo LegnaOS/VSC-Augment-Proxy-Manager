@@ -63,7 +63,33 @@ export async function forwardToGoogleStream(augmentReq: any, res: any) {
     const baseParams: any = { model: state.currentConfig.model };
     if (system) { baseParams.systemInstruction = system; }
     if (tools && tools.length > 0) { baseParams.tools = [{ functionDeclarations: tools }]; }
-    baseParams.generationConfig = { temperature: 0.7, topP: 0.95, topK: 40, maxOutputTokens: 8192 };
+    // 按模型动态设置 maxOutputTokens
+    const modelName = (state.currentConfig.model || '').toLowerCase();
+    let maxOutputTokens = 8192; // 默认值
+    if (modelName.includes('gemini-3-pro') || modelName.includes('gemini-3-ultra')) {
+        maxOutputTokens = 65536;
+    } else if (modelName.includes('gemini-3-flash') || modelName.includes('gemini-3-nano')) {
+        maxOutputTokens = 32768;
+    } else if (modelName.includes('gemini-3')) {
+        maxOutputTokens = 65536;
+    } else if (modelName.includes('gemini-2.5-pro')) {
+        maxOutputTokens = 65536;
+    } else if (modelName.includes('gemini-2.5-flash')) {
+        maxOutputTokens = 32768;
+    } else if (modelName.includes('gemini-2.5')) {
+        maxOutputTokens = 65536;
+    } else if (modelName.includes('gemini-2.0-flash-thinking')) {
+        maxOutputTokens = 8192;
+    } else if (modelName.includes('gemini-2.0-flash')) {
+        maxOutputTokens = 8192;
+    } else if (modelName.includes('gemini-2.0')) {
+        maxOutputTokens = 8192;
+    } else if (modelName.includes('gemini-1.5-pro')) {
+        maxOutputTokens = 8192;
+    } else if (modelName.includes('gemini-1.5-flash')) {
+        maxOutputTokens = 8192;
+    }
+    baseParams.generationConfig = { temperature: 0.7, topP: 0.95, topK: 40, maxOutputTokens };
 
     let currentContents = [...geminiMessages];
     const MAX_ITERATIONS = 25;

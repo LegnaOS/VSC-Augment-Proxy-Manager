@@ -290,6 +290,53 @@ function convertOpenAIMessagesToResponsesInput(messages: any[]): any[] {
     return input;
 }
 
+function getMaxOutputTokens(model: string): number {
+    const m = model.toLowerCase();
+    // OpenAI reasoning 系列
+    if (m.includes('o4-mini')) return 100000;
+    if (m.includes('o3-pro')) return 100000;
+    if (m.includes('o3-mini')) return 65536;
+    if (m.includes('o3')) return 100000;
+    if (m.includes('o1-pro')) return 32768;
+    if (m.includes('o1-mini')) return 65536;
+    if (m.includes('o1')) return 100000;
+    // GPT 系列
+    if (m.includes('gpt-4.1')) return 32768;
+    if (m.includes('gpt-4o-mini')) return 16384;
+    if (m.includes('gpt-4o')) return 16384;
+    if (m.includes('gpt-4-turbo')) return 4096;
+    if (m.includes('gpt-4')) return 8192;
+    if (m.includes('gpt-3.5')) return 4096;
+    // DeepSeek 系列
+    if (m.includes('deepseek-r1')) return 16384;
+    if (m.includes('deepseek-v3')) return 8192;
+    if (m.includes('deepseek-coder')) return 8192;
+    if (m.includes('deepseek')) return 8192;
+    // GLM 系列
+    if (m.includes('glm-4-plus')) return 8192;
+    if (m.includes('glm-4')) return 4096;
+    if (m.includes('glm')) return 4096;
+    // Kimi / Moonshot 系列
+    if (m.includes('kimi-k2')) return 16384;
+    if (m.includes('kimi') || m.includes('moonshot')) return 8192;
+    // Qwen 系列
+    if (m.includes('qwen3')) return 16384;
+    if (m.includes('qwen2.5')) return 8192;
+    if (m.includes('qwen')) return 8192;
+    // Yi / 零一万物
+    if (m.includes('yi-')) return 4096;
+    // MiniMax
+    if (m.includes('minimax')) return 16384;
+    // Mistral
+    if (m.includes('mistral-large')) return 8192;
+    if (m.includes('mistral')) return 8192;
+    // Llama
+    if (m.includes('llama-4')) return 16384;
+    if (m.includes('llama-3')) return 8192;
+    if (m.includes('llama')) return 4096;
+    return 16384; // 合理默认值
+}
+
 function buildOpenAIRequestBody(
     messages: any[],
     tools: any[] | undefined,
@@ -310,7 +357,7 @@ function buildOpenAIRequestBody(
             input: continuation?.responseInputs?.length
                 ? continuation.responseInputs
                 : convertOpenAIMessagesToResponsesInput(messages),
-            max_output_tokens: 115000
+            max_output_tokens: getMaxOutputTokens(model)
         };
 
         if (instructions && !continuation?.previousResponseId) {
@@ -335,7 +382,7 @@ function buildOpenAIRequestBody(
 
     const requestBody: any = {
         model: model,
-        max_tokens: 115000,
+        max_tokens: getMaxOutputTokens(model),
         messages: messages,
         stream: true
     };
